@@ -1,0 +1,21 @@
+---
+import HouseTour from '../components/HouseTour.jsx';
+---
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Casa de Adobe — Recorrido 3D</title>
+    <meta name="description" content="Recorrido virtual en primera persona de Casa de Adobe" />
+  </head>
+  <body>
+    <HouseTour client:only="react" />
+  </body>
+</html>
+
+<style is:global>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+</style>
