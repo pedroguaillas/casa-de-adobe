@@ -1,7 +1,60 @@
 # ANALISIS — Casa de Adobe
 
-Fuente: `CASA DE ADOVE 1.pdf`, `CASA DE ADOVE 2.pdf`, `CASA DE ADOVE 3.pdf`, `casa.jpeg`  
+Fuente: `CASA DE ADOVE 1.pdf`, `CASA DE ADOVE 2.pdf`, `CASA DE ADOVE 3.pdf`, `casa.jpeg`,
+renders 3D `WhatsApp Image 2026-07-03 *.jpeg` (11 imágenes)  
 Escala planos: 1:50
+
+---
+
+## Renders 3D (julio 2026) — información nueva
+
+Los renders aportan mucho más detalle que los PDF: cortes cenitales amueblados de
+ambos pisos + fachadas desde todos los ángulos.
+
+### Exterior (fachadas)
+- **Techos**: dos aguas tipo *shed* desfasadas en altura (no dos aguas clásico),
+  con banda de clerestorio entre ambas. Teja color salmón/terracota.
+- **Chimenea de piedra**: columna vertical a la derecha de la entrada, sobresale
+  del techo. Piedra natural irregular.
+- **Celosía de ladrillo** (patrón damero perforado): muro lateral derecho, planta baja.
+- **Porche de entrada**: losa de concreto, postes de madera, puffs morados,
+  macetas con plantas. Pérgola de madera arriba.
+- **Balcón** sobre el porche: piso de teja terracota, baranda de madera,
+  pérgola de listones de madera al nivel del techo.
+- **Carpintería**: puertas y ventanales de perfil metálico negro con vidrio
+  (entrada = doble puerta vidriada; la escalera se ve desde afuera).
+- **Banda horizontal de madera** entre pisos en todo el perímetro.
+- **Zócalo de piedra** en la base de la planta baja.
+
+### Planta baja (corte cenital amueblado)
+- **Sala de juegos / estudio** (izquierda): mesa de billar (paño verde) + piano negro.
+- **Cocina** (fondo-derecha): muebles bajos con frentes **rojos**, mesón de madera,
+  isla central, refrigerador.
+- **Comedor** (derecha-centro): mesa de madera + 4 sillas.
+- **Sala** (frente-derecha): sofá claro + mesa de centro.
+- **Baño** (frente-izquierda): volumen con muros de **piedra**.
+- **Escalera**: al centro de la planta, tramo recto de madera, visible desde la entrada.
+
+### Planta alta (corte cenital amueblado)
+- **3 dormitorios**: master (frente-derecha), dormitorio 2 (frente-izquierda),
+  dormitorio 1 (fondo-izquierda). Camas con estructura de madera clara.
+- **Baño compartido** (fondo-centro): tina, inodoro, lavamanos.
+- **Vestidor + baño master** (fondo-derecha): armarios de madera.
+- **Pasillo** central alrededor del hueco de la escalera, con baranda.
+- **Balcón** al frente-centro, acceso por pasillo entre ambos dormitorios frontales.
+
+### Decisiones aplicadas al placeholder procedural (`Scene.jsx`)
+- Escalera: tramo recto en X, arranque x=-2.3, 16 escalones, ancho 1.2 m, z∈[-1.1, 0.1].
+- Hueco de losa piso 2 sobre la escalera: x∈[-1.2, 2.4], z∈[-1.2, 0.2]
+  (dimensionado para altura de cabeza desde el escalón 4) + baranda en 3 lados.
+- Niveles: piso 1 en y=0.2, piso 2 en y=3.0, cielo raso alto en y=5.4.
+- Frente de la casa = +Z. Spawn del jugador en el sendero: [0, 0.95, 10.5].
+- **Física escalera**: el autostep de rapier se atasca en escalones reales; se usa
+  un `CuboidCollider` invisible en rampa (32°) alineado con las narices de los
+  escalones. OJO: meshes con `visible={false}` NO generan collider automático.
+- Cápsula del jugador 1.80 m total (vanos de puerta 2.1 m; una cápsula de 2.1 m
+  quedaba atascada exactamente en el dintel).
+- Debug de colliders: `http://localhost:4321/?debug` (solo dev).
 
 ---
 
@@ -62,15 +115,15 @@ HOUSE_DEPTH  = 7.50   // eje Z
 FLOOR_HEIGHT = 2.80   // Y: cota piso 2
 
 // Cámara / jugador
-CAPSULE_HALF_H = 0.70  // Cápsula rapier half-height
-CAPSULE_RADIUS = 0.35  // Cápsula rapier radius
-EYE_OFFSET     = 0.60  // Delta Y desde centro cápsula → ojos (~1.65m sobre piso)
+CAPSULE_HALF_H = 0.60  // Cápsula rapier half-height (total 1.80m — despeja vanos de 2.1m)
+CAPSULE_RADIUS = 0.30  // Cápsula rapier radius
+EYE_OFFSET     = 0.75  // Delta Y desde centro cápsula → ojos (~1.65m sobre piso)
 
 // Indicador de piso — umbral altura Y cápsula
 FLOOR_2_THRESHOLD = 2.50  // Y > 2.50 → segundo piso
 
-// Spawn exterior (frente de la casa, jardín)
-SPAWN_POSITION = [0, 1.05, 8.0]  // Centro-frente, ojo a 1.65m, 0.5m fuera de fachada
+// Spawn exterior (sendero frente a la casa)
+SPAWN_POSITION = [0, 0.95, 10.5]
 
 // Escalera (placeholder — ajustar con nombres de mesh del .glb real)
 STAIR_STEPS    = 16

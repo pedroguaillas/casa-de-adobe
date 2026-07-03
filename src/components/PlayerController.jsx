@@ -6,12 +6,12 @@ import * as THREE from 'three';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // ADJUST: spawn exterior fachada frontal centrado
-const SPAWN  = [0, 1.05, 8.0];
-// Capsule: half-height 0.70 + radius 0.35 → total 2.10m, center spawns at 1.05 → bottom at ground
-const CAPSULE_HALF_H = 0.70;
-const CAPSULE_RADIUS = 0.35;
+const SPAWN  = [0, 0.95, 10.5];
+// Capsule: half-height 0.60 + radius 0.30 → total 1.80m (clears 2.1m door openings)
+const CAPSULE_HALF_H = 0.60;
+const CAPSULE_RADIUS = 0.30;
 // Camera eye = capsule center + EYE_OFFSET → ~1.65m above floor
-const EYE_OFFSET = 0.60;
+const EYE_OFFSET = 0.75;
 
 const WALK_SPEED = 4.5; // m/s
 const GRAVITY    = -22; // m/s²
@@ -115,6 +115,10 @@ function PlayerPhysics({ onLockChange, onFloorChange }) {
     // ── Sync camera to body ────────────────────────────────────────────────
     const np = bodyRef.current.translation();
     camera.position.set(np.x, np.y + EYE_OFFSET, np.z);
+    if (import.meta.env.DEV) {
+      window.__playerPos = { x: np.x, y: np.y, z: np.z };
+      window.__world = world;
+    }
 
     // ── Floor indicator ────────────────────────────────────────────────────
     // ADJUST: threshold 2.5 assumes entrepiso 2.80m; change if your model differs

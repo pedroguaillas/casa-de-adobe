@@ -16,7 +16,7 @@ export default function HouseTour() {
     <div style={{ position: 'fixed', inset: 0, background: '#0a0806' }}>
       <Canvas
         shadows
-        camera={{ fov: 75, near: 0.05, far: 300, position: [0, 1.65, 8] }}
+        camera={{ fov: 75, near: 0.05, far: 300, position: [0, 1.65, 10.5] }}
         gl={{
           antialias: true,
           // Cap pixel ratio — crucial for Retina/4K performance
@@ -28,6 +28,7 @@ export default function HouseTour() {
             gravity={[0, -22, 0]}
             // timeStep="vary" lets rapier match actual frame delta
             timeStep="vary"
+            debug={import.meta.env.DEV && typeof window !== 'undefined' && window.location.search.includes('debug')}
           >
             <Scene />
             <PlayerController
