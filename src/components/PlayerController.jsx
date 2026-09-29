@@ -3,6 +3,8 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { PointerLockControls } from '@react-three/drei';
 import { RigidBody, CapsuleCollider, useRapier } from '@react-three/rapier';
 import * as THREE from 'three';
+import { input } from '../lib/input.js';
+import { isTouch } from '../lib/quality.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // ADJUST: spawn exterior fachada frontal centrado
@@ -13,28 +15,47 @@ const CAPSULE_RADIUS = 0.30;
 // Camera eye = capsule center + EYE_OFFSET → ~1.65m above floor
 const EYE_OFFSET = 0.75;
 
-const WALK_SPEED = 4.5; // m/s
-const GRAVITY    = -22; // m/s²
+const WALK_SPEED   = 2.6;  // m/s — human walking pace
+const SPRINT_SPEED = 4.8;  // m/s
+const ACCEL        = 16;   // m/s² ramp-up
+const DECEL        = 22;   // m/s² ramp-down
+const GRAVITY      = -22;  // m/s²
+
+// Head bob — subtle; tuned so a full stride is ~2 steps/s at walking pace
+const BOB_FREQ   = 1.85;   // cycles per metre travelled
+const BOB_Y      = 0.032;  // metres
+const BOB_X      = 0.022;  // metres of lateral sway
+const TOUCH_LOOK = 0.0032; // radians per pixel dragged
+const PITCH_LIMIT = Math.PI / 2 - 0.08;
 
 // ── Key state ─────────────────────────────────────────────────────────────────
 function useKeys() {
-  const keys = useRef({ w: false, a: false, s: false, d: false });
+  const keys = useRef({ w: false, a: false, s: false, d: false, sprint: false });
   useEffect(() => {
     const dn = (e) => {
       if (e.code === 'KeyW' || e.code === 'ArrowUp')    keys.current.w = true;
       if (e.code === 'KeyA' || e.code === 'ArrowLeft')  keys.current.a = true;
       if (e.code === 'KeyS' || e.code === 'ArrowDown')  keys.current.s = true;
       if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.current.d = true;
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') keys.current.sprint = true;
     };
     const up = (e) => {
       if (e.code === 'KeyW' || e.code === 'ArrowUp')    keys.current.w = false;
       if (e.code === 'KeyA' || e.code === 'ArrowLeft')  keys.current.a = false;
       if (e.code === 'KeyS' || e.code === 'ArrowDown')  keys.current.s = false;
       if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.current.d = false;
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') keys.current.sprint = false;
     };
+    // Releasing keys on blur avoids "stuck walking" after an alt-tab
+    const blur = () => { keys.current = { w: false, a: false, s: false, d: false, sprint: false }; };
     window.addEventListener('keydown', dn);
     window.addEventListener('keyup', up);
-    return () => { window.removeEventListener('keydown', dn); window.removeEventListener('keyup', up); };
+    window.addEventListener('blur', blur);
+    return () => {
+      window.removeEventListener('keydown', dn);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', blur);
+    };
   }, []);
   return keys;
 }
@@ -42,15 +63,19 @@ function useKeys() {
 // ── Temp vectors (reused each frame) ─────────────────────────────────────────
 const _fwd  = new THREE.Vector3();
 const _rgt  = new THREE.Vector3();
-const _move = new THREE.Vector3();
+const _want = new THREE.Vector3();
 const _up   = new THREE.Vector3(0, 1, 0);
 
 // ── Physics + movement ────────────────────────────────────────────────────────
-function PlayerPhysics({ onLockChange, onFloorChange }) {
+function PlayerPhysics({ onFloorChange, active }) {
   const bodyRef      = useRef(null);   // raw RAPIER.RigidBody
   const colliderRef  = useRef(null);   // raw RAPIER.Collider (from CapsuleCollider ref)
   const ccRef        = useRef(null);   // KinematicCharacterController
+  const velocity     = useRef(new THREE.Vector3()); // horizontal, m/s
   const velocityY    = useRef(0);
+  const bobDist      = useRef(0);
+  const yaw          = useRef(0);
+  const pitch        = useRef(0);
   const lastFloor    = useRef(1);
   const keys         = useKeys();
   const { camera }   = useThree();
@@ -67,39 +92,72 @@ function PlayerPhysics({ onLockChange, onFloorChange }) {
     return () => world.removeCharacterController(cc);
   }, [world]);
 
+  // On touch we own the camera orientation (no PointerLockControls)
+  useEffect(() => {
+    if (!isTouch) return;
+    camera.rotation.order = 'YXZ';
+    yaw.current = camera.rotation.y;
+    pitch.current = camera.rotation.x;
+  }, [camera]);
+
   useFrame((_, delta) => {
     // Wait until both body and collider are ready
     if (!bodyRef.current || !colliderRef.current || !ccRef.current) return;
 
     const dt = Math.min(delta, 0.05);
 
-    // ── Horizontal movement relative to camera yaw ─────────────────────────
+    // ── Touch look ─────────────────────────────────────────────────────────
+    if (isTouch) {
+      yaw.current   -= input.look.dx * TOUCH_LOOK;
+      pitch.current -= input.look.dy * TOUCH_LOOK;
+      pitch.current = THREE.MathUtils.clamp(pitch.current, -PITCH_LIMIT, PITCH_LIMIT);
+      input.look.dx = 0;
+      input.look.dy = 0;
+      camera.rotation.set(pitch.current, yaw.current, 0, 'YXZ');
+    }
+
+    // ── Desired direction, relative to camera yaw ──────────────────────────
     camera.getWorldDirection(_fwd);
     _fwd.y = 0;
     _fwd.normalize();
     _rgt.crossVectors(_fwd, _up).normalize();
 
-    _move.set(0, 0, 0);
-    if (keys.current.w) _move.addScaledVector(_fwd, 1);
-    if (keys.current.s) _move.addScaledVector(_fwd, -1);
-    if (keys.current.a) _move.addScaledVector(_rgt, -1);
-    if (keys.current.d) _move.addScaledVector(_rgt, 1);
-    if (_move.lengthSq() > 0) _move.normalize();
-    _move.multiplyScalar(WALK_SPEED);
+    _want.set(0, 0, 0);
+    if (active) {
+      if (keys.current.w) _want.addScaledVector(_fwd, 1);
+      if (keys.current.s) _want.addScaledVector(_fwd, -1);
+      if (keys.current.a) _want.addScaledVector(_rgt, -1);
+      if (keys.current.d) _want.addScaledVector(_rgt, 1);
+      // Analogue stick is additive: the magnitude survives, so half-tilt walks slowly
+      _want.addScaledVector(_fwd, input.move.y);
+      _want.addScaledVector(_rgt, input.move.x);
+    }
+    if (_want.lengthSq() > 1) _want.normalize();
+
+    const sprinting = keys.current.sprint || input.sprint;
+    _want.multiplyScalar(sprinting ? SPRINT_SPEED : WALK_SPEED);
+
+    // ── Smooth acceleration (no instant start/stop) ────────────────────────
+    const rate = Math.min(1, (_want.lengthSq() > 0 ? ACCEL : DECEL) * dt);
+    velocity.current.x += (_want.x - velocity.current.x) * rate;
+    velocity.current.z += (_want.z - velocity.current.z) * rate;
+    if (Math.abs(velocity.current.x) < 0.01) velocity.current.x = 0;
+    if (Math.abs(velocity.current.z) < 0.01) velocity.current.z = 0;
 
     // ── Gravity ────────────────────────────────────────────────────────────
     velocityY.current += GRAVITY * dt;
 
     const desired = {
-      x: _move.x * dt,
+      x: velocity.current.x * dt,
       y: velocityY.current * dt,
-      z: _move.z * dt,
+      z: velocity.current.z * dt,
     };
 
     // ── Character controller (colliderRef.current = raw RAPIER.Collider) ───
     ccRef.current.computeColliderMovement(colliderRef.current, desired);
 
-    if (ccRef.current.computedGrounded()) {
+    const grounded = ccRef.current.computedGrounded();
+    if (grounded) {
       velocityY.current = Math.max(0, velocityY.current);
     }
 
@@ -112,9 +170,23 @@ function PlayerPhysics({ onLockChange, onFloorChange }) {
       z: pos.z + corrected.z,
     });
 
-    // ── Sync camera to body ────────────────────────────────────────────────
+    // ── Sync camera to body, with head bob ─────────────────────────────────
     const np = bodyRef.current.translation();
-    camera.position.set(np.x, np.y + EYE_OFFSET, np.z);
+    const travelled = Math.hypot(corrected.x, corrected.z);
+    let bobY = 0, bobX = 0;
+    if (grounded) {
+      bobDist.current += travelled;
+      // amplitude scales with how fast we are actually moving, not input
+      const amp = Math.min(1, (travelled / dt) / WALK_SPEED);
+      const phase = bobDist.current * BOB_FREQ * Math.PI * 2;
+      bobY = Math.sin(phase) * BOB_Y * amp;
+      bobX = Math.cos(phase * 0.5) * BOB_X * amp;
+    }
+    camera.position.set(
+      np.x + _rgt.x * bobX,
+      np.y + EYE_OFFSET + bobY,
+      np.z + _rgt.z * bobX,
+    );
     if (import.meta.env.DEV) {
       window.__playerPos = { x: np.x, y: np.y, z: np.z };
       window.__world = world;
@@ -144,16 +216,18 @@ function PlayerPhysics({ onLockChange, onFloorChange }) {
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
-export default function PlayerController({ onLockChange, onFloorChange }) {
+export default function PlayerController({ onLockChange, onFloorChange, active = true }) {
   return (
     <>
-      <PointerLockControls
-        onLock={() => onLockChange?.(true)}
-        onUnlock={() => onLockChange?.(false)}
-        minPolarAngle={0.1}
-        maxPolarAngle={Math.PI - 0.1}
-      />
-      <PlayerPhysics onLockChange={onLockChange} onFloorChange={onFloorChange} />
+      {!isTouch && (
+        <PointerLockControls
+          onLock={() => onLockChange?.(true)}
+          onUnlock={() => onLockChange?.(false)}
+          minPolarAngle={0.1}
+          maxPolarAngle={Math.PI - 0.1}
+        />
+      )}
+      <PlayerPhysics onFloorChange={onFloorChange} active={active} />
     </>
   );
 }

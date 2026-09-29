@@ -8,12 +8,19 @@ export default function LoadingScreen() {
   const [fadingOut, setFadingOut] = useState(false);
 
   useEffect(() => {
-    if (!active && progress === 100) {
-      setFadingOut(true);
-      const t = setTimeout(() => setVisible(false), 650);
-      return () => clearTimeout(t);
-    }
+    // Everything in the scene is procedural, so the loader can report 0/0 and
+    // never reach 100. `active` going false is the real "scene is up" signal;
+    // the grace period covers the gap before a loader has registered anything.
+    if (active) return;
+    const grace = setTimeout(() => setFadingOut(true), progress === 100 ? 0 : 450);
+    return () => clearTimeout(grace);
   }, [active, progress]);
+
+  useEffect(() => {
+    if (!fadingOut) return;
+    const t = setTimeout(() => setVisible(false), 650);
+    return () => clearTimeout(t);
+  }, [fadingOut]);
 
   if (!visible) return null;
 
@@ -21,9 +28,9 @@ export default function LoadingScreen() {
     <div className={`loading-screen${fadingOut ? ' fade-out' : ''}`}>
       <p className="loading-title">Casa de Adobe</p>
       <div className="loading-bar-wrap">
-        <div className="loading-bar-fill" style={{ width: `${progress}%` }} />
+        <div className="loading-bar-fill" style={{ width: `${Math.max(progress, fadingOut ? 100 : 8)}%` }} />
       </div>
-      <p className="loading-pct">{Math.round(progress)}%</p>
+      <p className="loading-pct">{Math.round(Math.max(progress, fadingOut ? 100 : 0))}%</p>
     </div>
   );
 }

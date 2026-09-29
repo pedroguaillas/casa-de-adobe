@@ -156,3 +156,118 @@
   text-transform: uppercase;
   transition: opacity 0.3s ease;
 }
+
+/* ─── Touch / mobile ─────────────────────────────────────────────────────── */
+
+/* Desktop keeps pointer-events:none so clicks reach the canvas and fire
+   PointerLockControls; touch devices need the overlay to catch the tap. */
+.instructions.tappable {
+  pointer-events: auto;
+}
+
+.touch-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.joy-base {
+  position: absolute;
+  width: 116px;
+  height: 116px;
+  margin: -58px 0 0 -58px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(200, 169, 110, 0.45);
+  background: rgba(10, 8, 6, 0.28);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.joy-knob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 52px;
+  height: 52px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(245, 236, 215, 0.35);
+  border: 1px solid rgba(245, 236, 215, 0.6);
+}
+
+.touch-btn {
+  position: absolute;
+  appearance: none;
+  border: 1px solid rgba(200, 169, 110, 0.35);
+  border-radius: 999px;
+  background: rgba(10, 8, 6, 0.6);
+  color: #F5ECD7;
+  font-family: system-ui, sans-serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.85rem 1.3rem;
+  touch-action: none;
+}
+
+.touch-btn:active {
+  background: rgba(200, 169, 110, 0.35);
+}
+
+.touch-sprint {
+  right: max(1.2rem, env(safe-area-inset-right));
+  bottom: max(5.2rem, calc(env(safe-area-inset-bottom) + 5rem));
+}
+
+.touch-exit {
+  right: max(1.2rem, env(safe-area-inset-right));
+  top: max(1.2rem, env(safe-area-inset-top));
+  padding: 0.6rem 1rem;
+}
+
+.rotate-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  background: rgba(10, 8, 6, 0.92);
+  color: rgba(245, 236, 215, 0.85);
+  font-family: system-ui, sans-serif;
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 2rem;
+}
+
+.rotate-icon {
+  font-size: 2.6rem;
+  color: #C8A96E;
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+/* Bottom corners belong to the joystick and the sprint button on phones */
+@media (pointer: coarse) {
+  .floor-indicator {
+    bottom: auto;
+    right: auto;
+    top: max(1.2rem, env(safe-area-inset-top));
+    left: max(1.2rem, env(safe-area-inset-left));
+  }
+
+  .instructions-box {
+    padding: 1.8rem 1.6rem;
+    max-width: min(88vw, 340px);
+  }
+
+  .instructions-box h2 {
+    font-size: 1.1rem;
+  }
+}

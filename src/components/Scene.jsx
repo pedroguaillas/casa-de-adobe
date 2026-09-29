@@ -1,8 +1,10 @@
-import { Environment } from '@react-three/drei';
+import { Environment, Lightformer, Sky } from '@react-three/drei';
 import { RigidBody, CuboidCollider } from '@react-three/rapier';
 import { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { MAT } from '../lib/materials.js';
+import { QUALITY } from '../lib/quality.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Casa de Adobe — procedural placeholder built from the architectural plans
@@ -44,32 +46,10 @@ const STAIR_ZC   = -0.5; // stairs span z ∈ [-1.1, 0.1]
 // slab edge while climbing (capsule top ≤ 2.8 only up to step 2)
 const HOLE = { x0: -2.0, x1: 2.4, z0: -1.2, z1: 0.2 };
 
-// ─── Materials (shared instances) ────────────────────────────────────────────
-const MAT = {
-  adobe:     new THREE.MeshStandardMaterial({ color: '#C8A96E', roughness: 0.92 }),
-  adobeSide: new THREE.MeshStandardMaterial({ color: '#BDA080', roughness: 0.92 }),
-  concrete:  new THREE.MeshStandardMaterial({ color: '#CFC6B8', roughness: 0.8 }),
-  woodFloor: new THREE.MeshStandardMaterial({ color: '#B98A5A', roughness: 0.7 }),
-  ceiling:   new THREE.MeshStandardMaterial({ color: '#EDE0CC', roughness: 0.85 }),
-  grass:     new THREE.MeshStandardMaterial({ color: '#5A7A3A', roughness: 1.0 }),
-  wood:      new THREE.MeshStandardMaterial({ color: '#6B4226', roughness: 0.7 }),
-  woodLight: new THREE.MeshStandardMaterial({ color: '#A97B4F', roughness: 0.7 }),
-  tile:      new THREE.MeshStandardMaterial({ color: '#C77B5B', roughness: 0.8 }),
-  stone:     new THREE.MeshStandardMaterial({ color: '#8E8175', roughness: 0.95 }),
-  frame:     new THREE.MeshStandardMaterial({ color: '#1C1C1C', roughness: 0.5 }),
-  glass:     new THREE.MeshPhysicalMaterial({
-    color: '#9BBCCB', transparent: true, opacity: 0.28,
-    roughness: 0.08, metalness: 0, depthWrite: false,
-  }),
-  kitchenRed: new THREE.MeshStandardMaterial({ color: '#A5352C', roughness: 0.6 }),
-  white:     new THREE.MeshStandardMaterial({ color: '#F2EFE9', roughness: 0.6 }),
-  fabric:    new THREE.MeshStandardMaterial({ color: '#D9D2C3', roughness: 0.95 }),
-  purple:    new THREE.MeshStandardMaterial({ color: '#8B5FBF', roughness: 0.9 }),
-  poolGreen: new THREE.MeshStandardMaterial({ color: '#2FA33B', roughness: 0.85 }),
-  black:     new THREE.MeshStandardMaterial({ color: '#141414', roughness: 0.4 }),
-  leaf:      new THREE.MeshStandardMaterial({ color: '#4E7A32', roughness: 1.0 }),
-  trunk:     new THREE.MeshStandardMaterial({ color: '#7A5A3A', roughness: 1.0 }),
-};
+// Materials live in src/lib/materials.js — procedural colour + bump maps, no
+// network assets. Shadow casting is tier-gated: on phones we skip the shadow
+// pass entirely rather than shipping a quarter-res, crawling one.
+const SHADOWS = QUALITY.shadows;
 
 // ─── Primitive helpers ───────────────────────────────────────────────────────
 
@@ -78,7 +58,7 @@ function BB({ min, max, mat, castShadow = false, receiveShadow = true }) {
   const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
   const pos  = [(max[0] + min[0]) / 2, (max[1] + min[1]) / 2, (max[2] + min[2]) / 2];
   return (
-    <mesh position={pos} castShadow={castShadow} receiveShadow={receiveShadow} material={mat}>
+    <mesh position={pos} castShadow={castShadow && SHADOWS} receiveShadow={receiveShadow && SHADOWS} material={mat}>
       <boxGeometry args={size} />
     </mesh>
   );
@@ -86,7 +66,7 @@ function BB({ min, max, mat, castShadow = false, receiveShadow = true }) {
 
 function Box({ pos, size, mat, rot, castShadow = false, receiveShadow = true }) {
   return (
-    <mesh position={pos} rotation={rot} castShadow={castShadow} receiveShadow={receiveShadow} material={mat}>
+    <mesh position={pos} rotation={rot} castShadow={castShadow && SHADOWS} receiveShadow={receiveShadow && SHADOWS} material={mat}>
       <boxGeometry args={size} />
     </mesh>
   );
@@ -442,15 +422,15 @@ function Exterior() {
       <Box pos={[3.05, 6.33, 0]} rot={[0, 0, -0.13]} size={[5.9, 0.1, D + 1.6]} mat={MAT.wood} />
 
       {/* Porch furniture: purple bean bags + plant pots (per renders) */}
-      <mesh position={[-1.9, 0.4, 5.4]} scale={[1, 0.7, 1]} castShadow material={MAT.purple}>
+      <mesh position={[-1.9, 0.4, 5.4]} scale={[1, 0.7, 1]} castShadow={SHADOWS} material={MAT.purple}>
         <sphereGeometry args={[0.45, 16, 12]} />
       </mesh>
-      <mesh position={[1.7, 0.38, 5.7]} scale={[1, 0.7, 1]} castShadow material={MAT.purple}>
+      <mesh position={[1.7, 0.38, 5.7]} scale={[1, 0.7, 1]} castShadow={SHADOWS} material={MAT.purple}>
         <sphereGeometry args={[0.4, 16, 12]} />
       </mesh>
       {[[-2.4, 4.1], [2.3, 4.3]].map(([x, z], i) => (
         <group key={`pot${i}`}>
-          <mesh position={[x, 0.35, z]} castShadow material={MAT.tile}>
+          <mesh position={[x, 0.35, z]} castShadow={SHADOWS} material={MAT.tile}>
             <cylinderGeometry args={[0.22, 0.16, 0.4, 10]} />
           </mesh>
           <mesh position={[x, 0.85, z]} material={MAT.leaf}>
@@ -460,16 +440,18 @@ function Exterior() {
       ))}
 
       {/* Garden trees (tropical vegetation around the house) */}
-      {[[-9, -4], [-8, 6], [9, 5], [8, -6], [-4, 11], [5, 12]].map(([x, z], i) => (
-        <group key={`tree${i}`}>
-          <mesh position={[x, 1.6, z]} castShadow material={MAT.trunk}>
-            <cylinderGeometry args={[0.14, 0.2, 3.2, 8]} />
-          </mesh>
-          <mesh position={[x, 3.7, z]} castShadow material={MAT.leaf}>
-            <sphereGeometry args={[1.3, 10, 8]} />
-          </mesh>
-        </group>
-      ))}
+      {[[-9, -4], [-8, 6], [9, 5], [8, -6], [-4, 11], [5, 12]]
+        .slice(0, QUALITY.trees)
+        .map(([x, z], i) => (
+          <group key={`tree${i}`}>
+            <mesh position={[x, 1.6, z]} castShadow={SHADOWS} material={MAT.trunk}>
+              <cylinderGeometry args={[0.14, 0.2, 3.2, 8]} />
+            </mesh>
+            <mesh position={[x, 3.7, z]} castShadow={SHADOWS} material={MAT.leaf}>
+              <sphereGeometry args={[1.3, 10, 8]} />
+            </mesh>
+          </group>
+        ))}
     </>
   );
 }
@@ -484,30 +466,101 @@ function ProceduralHouse() {
   );
 }
 
+// ─── Fittings (no collision) ─────────────────────────────────────────────────
+// Rendered OUTSIDE the RigidBody on purpose: an open door leaf or a hanging
+// lamp would otherwise become a cuboid collider and block the doorway.
+
+// Door leaf hinged at [x, z], swung `angle` radians about the hinge.
+function Door({ hinge, y, width = 0.8, height = 2.1, angle, mat = MAT.woodLight }) {
+  return (
+    <group position={[hinge[0], y, hinge[1]]} rotation={[0, angle, 0]}>
+      <Box pos={[width / 2, height / 2, 0]} size={[width, height, 0.045]} mat={mat} castShadow />
+      {/* handle */}
+      <Box pos={[width - 0.08, height / 2, 0.04]} size={[0.05, 0.05, 0.1]} mat={MAT.frame} />
+    </group>
+  );
+}
+
+// Pendant lamp: emissive shade on a cord, sitting under a fill light
+function Lamp({ pos, drop = 0.55 }) {
+  const [x, y, z] = pos;
+  return (
+    <group>
+      <Box pos={[x, y + drop / 2, z]} size={[0.015, drop, 0.015]} mat={MAT.frame} />
+      <mesh position={[x, y - 0.02, z]} material={MAT.lamp}>
+        <sphereGeometry args={[0.1, 12, 10]} />
+      </mesh>
+      <mesh position={[x, y + 0.07, z]} material={MAT.black}>
+        <coneGeometry args={[0.19, 0.18, 14, 1, true]} />
+      </mesh>
+    </group>
+  );
+}
+
+function Fittings() {
+  return (
+    <>
+      {/* Ground floor — entry door standing open against the jamb */}
+      <Door hinge={[-0.82, hd - T / 2]} y={F1} width={1.6} height={2.1} angle={-1.72} mat={MAT.wood} />
+
+      {/* Second floor — bedroom / bathroom doors, all ajar */}
+      <Door hinge={[-2.78, -1.94]} y={F2} angle={-1.5} />
+      <Door hinge={[-0.58, -1.94]} y={F2} width={0.7} angle={-1.2} />
+      <Door hinge={[3.02, -1.94]}  y={F2} angle={-1.5} />
+      <Door hinge={[-2.18, 1.46]}  y={F2} angle={1.5} />
+      <Door hinge={[2.62, 1.46]}   y={F2} angle={1.35} />
+
+      {/* Pendant lamps over the living areas */}
+      <Lamp pos={[3.5, 2.30, 0.6]} />
+      <Lamp pos={[2.4, 2.30, -2.1]} />
+      <Lamp pos={[-3.4, 2.30, -1.8]} />
+      <Lamp pos={[3.0, F2 + 2.05, 2.7]} drop={0.45} />
+      <Lamp pos={[-3.5, F2 + 2.05, -2.9]} drop={0.45} />
+    </>
+  );
+}
+
 // ─── Lighting + atmosphere ───────────────────────────────────────────────────
 
 function Atmosphere() {
   const { scene } = useThree();
   useEffect(() => {
-    scene.background = new THREE.Color('#A8CDE8');
-    scene.fog = new THREE.Fog('#D4C5A9', 30, 90);
+    // <Sky> paints the dome; the flat colour is the fallback behind it and the
+    // colour the fog converges to at the far plane.
+    scene.background = new THREE.Color('#AFD1E8');
+    scene.fog = new THREE.Fog('#D8CBB2', QUALITY.fog[0], QUALITY.fog[1]);
     return () => { scene.background = null; scene.fog = null; };
   }, [scene]);
   return null;
 }
 
+// Sun direction — shared by the shadow-casting light and the sky shader so the
+// bright patch in the sky sits where the shadows say it should.
+const SUN = [12, 14, 8];
+
+// Interior warm fill, most important first: QUALITY.fillLights trims the tail
+// on weaker devices (each point light is a per-fragment cost on every surface).
+const FILLS = [
+  { pos: [2.5, 2.2, 1.5],        intensity: 1.2, distance: 9 },
+  { pos: [0.5, F2 + 2.0, 0.5],   intensity: 1.0, distance: 9 },
+  { pos: [-3, 2.2, -1.5],        intensity: 1.0, distance: 8 },
+  { pos: [2.5, 2.2, -2.5],       intensity: 0.9, distance: 7 },
+  { pos: [-3, F2 + 2.0, 2.5],    intensity: 0.8, distance: 7 },
+  { pos: [3, F2 + 2.0, -2.5],    intensity: 0.8, distance: 7 },
+];
+
 function Lighting() {
   return (
     <>
-      <hemisphereLight skyColor="#87CEEB" groundColor="#8B7355" intensity={0.6} />
+      <hemisphereLight skyColor="#9FC6E8" groundColor="#7E6C52" intensity={0.5} />
 
       {/* Main sun — afternoon, front-right of house */}
       <directionalLight
-        position={[12, 14, 8]}
-        intensity={2.2}
-        color="#FFF5E0"
-        castShadow
-        shadow-mapSize={[2048, 2048]}
+        position={SUN}
+        intensity={2.6}
+        color="#FFF1D6"
+        castShadow={SHADOWS}
+        shadow-mapSize={[QUALITY.shadowMap, QUALITY.shadowMap]}
         shadow-camera-near={0.5}
         shadow-camera-far={80}
         shadow-camera-left={-18}
@@ -519,19 +572,30 @@ function Lighting() {
       />
 
       {/* Soft sky bounce */}
-      <directionalLight position={[-8, 8, -6]} intensity={0.35} color="#C8D8F0" />
+      <directionalLight position={[-9, 7, -7]} intensity={0.3} color="#C0D6F4" />
 
-      {/* Interior warm fill — ground floor (sala / cocina / estudio) */}
-      <pointLight position={[2.5, 2.2, 1.5]} intensity={1.2} color="#FFE4B0" distance={9} decay={2} />
-      <pointLight position={[-3, 2.2, -1.5]} intensity={1.0} color="#FFE4B0" distance={8} decay={2} />
-      <pointLight position={[2.5, 2.2, -2.5]} intensity={0.9} color="#FFE4B0" distance={7} decay={2} />
-      {/* Interior warm fill — second floor */}
-      <pointLight position={[0.5, F2 + 2.0, 0.5]} intensity={1.0} color="#FFE4B0" distance={9} decay={2} />
-      <pointLight position={[-3, F2 + 2.0, 2.5]} intensity={0.8} color="#FFE4B0" distance={7} decay={2} />
-      <pointLight position={[3, F2 + 2.0, -2.5]} intensity={0.8} color="#FFE4B0" distance={7} decay={2} />
+      {FILLS.slice(0, QUALITY.fillLights).map((f, i) => (
+        <pointLight key={i} position={f.pos} intensity={f.intensity}
+                    color="#FFE0A8" distance={f.distance} decay={2} />
+      ))}
 
-      {/* HDRI environment — sky reflections + IBL */}
-      <Environment preset="sunset" background={false} />
+      {/* Physical sky — gives the facade a real gradient to reflect */}
+      <Sky distance={250} sunPosition={SUN} turbidity={2} rayleigh={3.2}
+           mieCoefficient={0.005} mieDirectionalG={0.8} />
+
+      {/* IBL built from lightformers instead of a downloaded HDRI: no network
+          asset, resolution scales with the device tier. */}
+      <Environment resolution={QUALITY.env} frames={1}>
+        <Lightformer form="rect" intensity={2.0} color="#FFE9C4"
+                     position={[8, 9, 6]} scale={[12, 12, 1]} target={[0, 0, 0]} />
+        <Lightformer form="rect" intensity={0.7} color="#BBD4F5"
+                     position={[-9, 7, -7]} scale={[14, 14, 1]} target={[0, 0, 0]} />
+        <Lightformer form="ring" intensity={0.5} color="#DCEBFF"
+                     position={[0, 12, 0]} scale={[16, 16, 1]} target={[0, 0, 0]} />
+        {/* ground bounce — warm, so interiors don't read blue */}
+        <Lightformer form="rect" intensity={0.45} color="#9C8A63"
+                     rotation-x={Math.PI / 2} position={[0, -3, 0]} scale={[30, 30, 1]} />
+      </Environment>
     </>
   );
 }
@@ -542,6 +606,7 @@ export default function Scene() {
       <Atmosphere />
       <Lighting />
       <ProceduralHouse />
+      <Fittings />
     </>
   );
 }
