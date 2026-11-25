@@ -44,92 +44,103 @@ ambos pisos + fachadas desde todos los ángulos.
 - **Balcón** al frente-centro, acceso por pasillo entre ambos dormitorios frontales.
 
 ### Decisiones aplicadas al placeholder procedural (`Scene.jsx`)
-- Escalera: tramo recto en X, arranque x=-2.3, 16 escalones, ancho 1.2 m, z∈[-1.1, 0.1].
-- Hueco de losa piso 2 sobre la escalera: x∈[-1.2, 2.4], z∈[-1.2, 0.2]
-  (dimensionado para altura de cabeza desde el escalón 4) + baranda en 3 lados.
-- Niveles: piso 1 en y=0.2, piso 2 en y=3.0, cielo raso alto en y=5.4.
-- Frente de la casa = +Z. Spawn del jugador en el sendero: [0, 0.95, 10.5].
-- **Física escalera**: el autostep de rapier se atasca en escalones reales; se usa
-  un `CuboidCollider` invisible en rampa (32°) alineado con las narices de los
-  escalones. OJO: meshes con `visible={false}` NO generan collider automático.
-- Cápsula del jugador 1.80 m total (vanos de puerta 2.1 m; una cápsula de 2.1 m
-  quedaba atascada exactamente en el dintel).
+Las cotas del plano (lámina 1, plantas 1:50) y los cortes (lámina 2) mandan sobre
+los renders. Distribución de renders (billar, piano, cocina roja) se conserva solo
+como mobiliario dentro del ambiente correcto del plano.
+- Frente de la casa = +Z (eje A). Spawn en el sendero: [0.15, 0.95, 10.5].
+- **Física escalera**: rampa invisible (`CuboidCollider`) de 38° sobre las narices
+  de los escalones; autostep de rapier se atasca en contrahuellas reales.
+  OJO: meshes con `visible={false}` NO generan collider automático.
+- **Portal**: rampa invisible de 14° + escalón de piedra en el borde frontal; la
+  cápsula toca un borde de 0.16–0.20 m a >45° y el autostep no lo sube.
+- Cápsula del jugador 1.80 m total (puertas 2.05 m, cielo PB libre 2.20 m).
 - Debug de colliders: `http://localhost:4321/?debug` (solo dev).
+- Hook de pruebas (solo dev): `window.__tour.{teleport, look, press, force}`.
 
 ---
 
-## Dimensiones reales estimadas
+## Sistema de ejes (planta 1:50)
+
+| Eje | Coordenada | Nota |
+|-----|-----------|------|
+| 1 · 2 · 3 · 4 (X) | -4.875 · -1.625 · +1.625 · +4.875 | crujías de 3.25 m |
+| C · B · A (Z) | -3.40 · 0 · +3.40 | crujías de 3.40 m, A = fachada frontal |
+| Muros | 0.20 m centrados en eje | caras interiores ±4.775 / ±3.30 / ±1.525 / ±1.725 |
+
+## Dimensiones reales
 
 | Dato | Valor | Origen |
 |------|-------|--------|
-| Ancho total (eje X) | **9.95 m** | Cota acotada en planta baja (ejes 1–4) |
-| Profundidad total (eje Z) | **~7.50 m** | Cota lateral visible en planta baja |
-| Altura entrepiso (piso 1→2) | **2.80 m** | Sección longitudinal: cota +2.80 |
-| Altura alero (eje Y tope muro) | **5.16 m** | Sección longitudinal: cota +5.16 |
-| Cumbrera (eje Y cima techo) | **6.16 m** | Sección longitudinal: cota +6.16 |
-| Grosor de muros | **~0.20 m** | Lectura escala en planta |
+| Ancho total (X) | **9.95 m** | Cota planta baja (ejes 1–4) |
+| Profundidad total (Z) | **7.00 m** | 0.20+3.20+0.20+3.20+0.20 (el 7.90 incluye el saliente del baño) |
+| NPT planta baja | **+0.20** | Plantas y cortes |
+| Bajo losa / cielo PB | **+2.40** | Cortes (libre 2.20 m) |
+| NPT planta alta | **+2.60** | Cortes (la planta indica +2.65) |
+| Cielo PA (viga) | **+4.90** | Cortes (libre 2.30 m) |
+| Tope de muro / alero | **+5.10** | Cortes |
+| Cumbrera lateral / linterna | **+5.75 / +6.04** | Cortes, cubierta 4.09 · 3.05 · 4.09 × 8.40 |
+
+## Escalera
+- 13 contrahuellas 0.185 (plano: 0.18 × 0.25), huella 0.235, ancho libre **1.00 m**.
+- Tramo recto en crujía central x ∈ [-1.525, +1.525], z ∈ [0.82, 1.82].
+- **Sube hacia -X**: paso 1 junto al eje 3 (lado sala), llega al pasillo PA junto al eje 2.
+- Pendiente 38° → `setMaxSlopeClimbAngle(45°)`.
+- Hueco losa PA: x ∈ [-1.525, 1.525], z ∈ [0.82, 1.86]; baranda en el lado del hall.
 
 ---
 
-## Planta Baja (+0.00)
+## Planta Baja (+0.20)
 
-Ambientes (de izquierda a derecha, fondo a frente):
+| Ambiente | X | Z |
+|----------|---|---|
+| EXTRA | -4.78 → -1.73 | -3.30 → -0.10 |
+| ESTUDIO | -4.78 → -1.73 | +0.10 → +3.30 (vano 1.00 a extra, puerta al vestíbulo) |
+| BAÑO | -2.94 → -1.73 | +2.95 → +4.21 (volumen de piedra, sobresale 0.90 al portal) |
+| SERVICIO | -1.53 → +1.53 | -3.30 → -2.00 (celosía en fachada posterior, puerta a comedor) |
+| COCINA | -1.53 → +1.53 | -1.82 → +0.62 (dos mesones 0.60 + pasillo 1.20) |
+| VESTÍBULO | -1.53 → +1.53 | +1.82 → +3.30 |
+| COMEDOR | +1.73 → +4.78 | -3.30 → -0.10 |
+| SALA | +1.73 → +4.78 | +0.10 → +3.30 (abierta al vestíbulo) |
+| PORTAL | -3.14 → +2.63 | +3.50 → +5.40, postes en x = ±1.625 |
+| Chimenea | +1.53 → +2.63 | +3.30 → +4.41 |
 
-| Ambiente | Posición aprox. |
-|----------|----------------|
-| EXTRA | Izquierda fondo |
-| SERVICIO | Centro fondo |
-| COMEDOR | Derecha fondo |
-| COCINA | Centro medio |
-| ESTUDIO | Izquierda medio |
-| VESTÍBULO | Centro frente (hall entrada) |
-| SALA | Derecha frente |
-| BAÑO | Izquierda frente |
+Entrada: frente vidriado 2.90 m, x ∈ [-1.375, +1.525], corrediza x ∈ [-0.6, 0.9].
+Ventanas laterales: 2 × 2.00 m por piso y lado (z ≈ [-2.75,-0.75] y [0.75,2.75]).
 
-**Escalera:** ubicada en zona centro-izquierda (entre COCINA y ESTUDIO), sube en dirección longitudinal (eje Z / profundidad). Descanso en la cima que conecta con PASILLO planta alta.
+## Planta Alta (+2.60)
 
-**Entrada principal:** fachada frontal (Z positivo), al centro-derecha. Puerta en VESTÍBULO.
-
----
-
-## Planta Alta (+2.80)
-
-| Ambiente | Posición aprox. |
-|----------|----------------|
-| DORMITORIO 2 | Izquierda |
-| DORMITORIO 1 | Centro |
-| BAÑO | Centro-izquierda |
-| VESTIDOR | Derecha fondo |
-| DORMITORIO MASTER | Derecha |
-| PASILLO | Centro (circulación) |
-| BALCÓN | Frente centro (sobre VESTÍBULO) |
+| Ambiente | X | Z |
+|----------|---|---|
+| DORMITORIO 2 | -4.78 → -1.73 | -3.30 → -0.10 |
+| BAÑO 2 | -4.78 → -3.13 | +0.10 → +3.30 |
+| PASILLO | -2.93 → -1.73 | +0.10 → +3.30 |
+| DORMITORIO 1 | -1.53 → +1.53 | -3.30 → +0.62 (puerta desde pasillo por eje 2) |
+| HALL (frente al hueco) | -1.53 → +1.53 | +1.86 → +3.30 |
+| BAÑO (suite) | +1.73 → +3.03 | -3.30 → -1.31 |
+| VESTIDOR | +1.73 → +4.78 | -3.30 → -0.10 |
+| MASTER | +1.73 → +4.78 | +0.10 → +3.30 (puerta desde hall por eje 3) |
+| BALCÓN | -3.14 → +1.53 | +3.50 → +4.41 (0.90 m) |
 
 ---
 
 ## Valores clave para el código
 
 ```js
-// Dimensiones reales (metros)
 HOUSE_WIDTH  = 9.95   // eje X
-HOUSE_DEPTH  = 7.50   // eje Z
-FLOOR_HEIGHT = 2.80   // Y: cota piso 2
+HOUSE_DEPTH  = 7.00   // eje Z
+F1 = 0.20; C1 = 2.40; F2 = 2.60; C2 = 4.90; WT = 5.10
 
-// Cámara / jugador
-CAPSULE_HALF_H = 0.60  // Cápsula rapier half-height (total 1.80m — despeja vanos de 2.1m)
-CAPSULE_RADIUS = 0.30  // Cápsula rapier radius
-EYE_OFFSET     = 0.75  // Delta Y desde centro cápsula → ojos (~1.65m sobre piso)
+CAPSULE_HALF_H = 0.60  // total 1.80 m
+CAPSULE_RADIUS = 0.30
+EYE_OFFSET     = 0.75  // ojos ~1.65 m sobre piso
 
-// Indicador de piso — umbral altura Y cápsula
-FLOOR_2_THRESHOLD = 2.50  // Y > 2.50 → segundo piso
+FLOOR_2_THRESHOLD = 2.30  // centro cápsula: PB ≈ 1.10, PA ≈ 3.50
+SPAWN_POSITION = [0.15, 0.95, 10.5]
 
-// Spawn exterior (sendero frente a la casa)
-SPAWN_POSITION = [0, 0.95, 10.5]
-
-// Escalera (placeholder — ajustar con nombres de mesh del .glb real)
-STAIR_STEPS    = 16
-STAIR_RISE     = 0.175  // 2.80 / 16
-STAIR_RUN      = 0.28   // profundidad por escalón
-STAIR_WIDTH    = 2.0    // ancho libre escalera
+STAIR_STEPS = 13
+STAIR_RISE  = 0.185
+STAIR_RUN   = 0.235
+STAIR_WIDTH = 1.00
 ```
 
 ---

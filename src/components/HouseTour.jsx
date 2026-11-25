@@ -61,7 +61,7 @@ export default function HouseTour() {
         dpr={dpr}
         // PCFSoftShadowMap is deprecated in three 0.185; PCF is the supported filter
         shadows={QUALITY.shadows ? { type: THREE.PCFShadowMap } : false}
-        camera={{ fov: QUALITY.fov, near: 0.05, far: QUALITY.far, position: [0, 1.65, 10.5] }}
+        camera={{ fov: QUALITY.fov, near: 0.05, far: QUALITY.far, position: [0.15, 1.65, 10.5] }}
         gl={{
           antialias: QUALITY.antialias,
           powerPreference: 'high-performance',

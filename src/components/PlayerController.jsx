@@ -7,9 +7,10 @@ import { input } from '../lib/input.js';
 import { isTouch } from '../lib/quality.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-// ADJUST: spawn exterior fachada frontal centrado
-const SPAWN  = [0, 0.95, 10.5];
-// Capsule: half-height 0.60 + radius 0.30 → total 1.80m (clears 2.1m door openings)
+// ADJUST: spawn on the stone path, aligned with the glass entry (x ∈ [-0.6, 0.9])
+const SPAWN  = [0.15, 0.95, 10.5];
+// Capsule: half-height 0.60 + radius 0.30 → total 1.80m (clears 2.05m doors and
+// the 2.20m clear height of the planta baja)
 const CAPSULE_HALF_H = 0.60;
 const CAPSULE_RADIUS = 0.30;
 // Camera eye = capsule center + EYE_OFFSET → ~1.65m above floor
@@ -84,6 +85,7 @@ function PlayerPhysics({ onFloorChange, active }) {
   // Build character controller once
   useEffect(() => {
     const cc = world.createCharacterController(0.01);
+    // stair ramp is 38° (13 risers × 0.185 over 3.05 m)
     cc.setMaxSlopeClimbAngle((45 * Math.PI) / 180);
     cc.setMinSlopeSlideAngle((50 * Math.PI) / 180);
     cc.enableAutostep(0.40, 0.10, true);
@@ -91,6 +93,25 @@ function PlayerPhysics({ onFloorChange, active }) {
     ccRef.current = cc;
     return () => world.removeCharacterController(cc);
   }, [world]);
+
+  // DEV-only test hook: teleport + synthetic keys, used by automated walk tests
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    window.__tour = {
+      teleport: (x, y, z) => {
+        bodyRef.current?.setTranslation({ x, y, z }, true);
+        velocity.current.set(0, 0, 0);
+        velocityY.current = 0;
+      },
+      press: (k, v = true) => { keys.current[k] = v; },
+      look: (y, p = 0) => {
+        yaw.current = y; pitch.current = p;
+        camera.rotation.set(p, y, 0, 'YXZ');
+      },
+      force: false, // set true to walk without pointer lock
+    };
+    return () => { delete window.__tour; };
+  }, [camera]);
 
   // On touch we own the camera orientation (no PointerLockControls)
   useEffect(() => {
@@ -123,7 +144,7 @@ function PlayerPhysics({ onFloorChange, active }) {
     _rgt.crossVectors(_fwd, _up).normalize();
 
     _want.set(0, 0, 0);
-    if (active) {
+    if (active || (import.meta.env.DEV && window.__tour?.force)) {
       if (keys.current.w) _want.addScaledVector(_fwd, 1);
       if (keys.current.s) _want.addScaledVector(_fwd, -1);
       if (keys.current.a) _want.addScaledVector(_rgt, -1);
@@ -193,8 +214,8 @@ function PlayerPhysics({ onFloorChange, active }) {
     }
 
     // ── Floor indicator ────────────────────────────────────────────────────
-    // ADJUST: threshold 2.5 assumes entrepiso 2.80m; change if your model differs
-    const floor = np.y > 2.5 ? 2 : 1;
+    // Capsule centre ≈ 1.10 on planta baja (+0.20), ≈ 3.50 on planta alta (+2.60)
+    const floor = np.y > 2.3 ? 2 : 1;
     if (floor !== lastFloor.current) {
       lastFloor.current = floor;
       onFloorChange?.(np.y);

@@ -1,14 +1,15 @@
 import { Environment, Lightformer, Sky } from '@react-three/drei';
 import { RigidBody, CuboidCollider } from '@react-three/rapier';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { MAT } from '../lib/materials.js';
 import { QUALITY } from '../lib/quality.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Casa de Adobe — procedural placeholder built from the architectural plans
-// (resources/CASA DE ADOVE *.pdf) and the 3D renders (resources/*.jpeg).
+// Casa de Adobe — procedural placeholder built from the dimensioned plans
+// (resources/CASA DE ADOVE 1.pdf: plantas 1:50, lámina 2: cortes/elevaciones).
+// See resources/ANALISIS.md for the full room table.
 //
 // REPLACE the <ProceduralHouse /> with RealHouse once casa.glb is ready:
 //
@@ -22,41 +23,49 @@ import { QUALITY } from '../lib/quality.js';
 //   }
 // ─────────────────────────────────────────────────────────────────────────────
 
-// House dimensions from plans (meters)
-const W = 9.95;          // width  (X)
-const D = 7.5;           // depth  (Z) — front facade faces +Z
-const T = 0.2;           // wall thickness
-const hw = W / 2;
-const hd = D / 2;
+// ── Grid (plan axes) ─────────────────────────────────────────────────────────
+// X: axes 1-2-3-4 every 3.25 m → centres at ±1.625, ±4.875. Width 9.95.
+// Z: axes C-B-A every 3.40 m → centres at -3.40, 0, +3.40. Depth 7.00.
+// Front facade (axis A, portal) faces +Z. Walls 0.20 centred on the axes.
+const W = 9.95;
+const D = 7.0;
+const T = 0.2;
+const hw = W / 2;          // 4.975 outer face
+const hd = D / 2;          // 3.50  outer face
+const iw = hw - T;         // 4.775 inner face
+const id = hd - T;         // 3.30  inner face
+const AX = 1.625;          // axes 2/3
+const a0 = AX - T / 2;     // 1.525 inner face toward centre bay
+const a1 = AX + T / 2;     // 1.725 inner face toward side bays
 
-// Vertical levels
-const F1 = 0.2;          // ground-floor walking surface (slab 0 → 0.2)
-const C1 = 2.8;          // ground-floor ceiling = bottom of level-2 slab
-const F2 = 3.0;          // second-floor walking surface (slab 2.8 → 3.0)
-const C2 = 5.4;          // second-floor ceiling / top of upper walls
+// ── Levels (sección longitudinal / transversal) ─────────────────────────────
+const F1 = 0.2;            // planta baja  NPT +0.20
+const C1 = 2.4;            // bottom of level-2 slab (+2.40)
+const F2 = 2.6;            // planta alta  NPT +2.60
+const C2 = 4.9;            // planta alta ceiling (+4.90)
+const WT = 5.1;            // top of walls / eave beam (+5.10)
+const DOOR = 2.05;         // door opening height (planta: 2.05)
 
-// Stairwell — straight run along X, matches the renders (stairs at plan center)
-const STAIR_X0 = -2.3;   // first riser
-const STAIR_STEPS = 16;
-const STAIR_RUN  = 0.28;
-const STAIR_RISE = (F2 - F1) / STAIR_STEPS; // 0.175
-const STAIR_W    = 1.2;
-const STAIR_ZC   = -0.5; // stairs span z ∈ [-1.1, 0.1]
-// Slab opening above the stairs — sized so the 2.1m player capsule clears the
-// slab edge while climbing (capsule top ≤ 2.8 only up to step 2)
-const HOLE = { x0: -2.0, x1: 2.4, z0: -1.2, z1: 0.2 };
+// ── Stair: 13 risers of 0.185 × tread 0.235, straight run along -X ─────────
+// Step 1 sits by axis 3 (sala side), arrival on the upper pasillo by axis 2.
+const STAIR_STEPS = 13;
+const STAIR_X0 = a0;                              // front of step 1
+const STAIR_RUN = (2 * a0) / STAIR_STEPS;         // 0.235
+const STAIR_RISE = (F2 - F1) / STAIR_STEPS;       // 0.185
+const STAIR_Z0 = 0.82;
+const STAIR_Z1 = 1.82;                            // 1.00 m clear width
+const STAIR_ZC = (STAIR_Z0 + STAIR_Z1) / 2;
+const STAIR_ANGLE = Math.atan2(F2 - F1, STAIR_STEPS * STAIR_RUN); // ≈ 38°
+// Upper slab opening above the run
+const HOLE = { x0: -a0, x1: a0, z0: STAIR_Z0, z1: 1.86 };
 
-// Materials live in src/lib/materials.js — procedural colour + bump maps, no
-// network assets. Shadow casting is tier-gated: on phones we skip the shadow
-// pass entirely rather than shipping a quarter-res, crawling one.
 const SHADOWS = QUALITY.shadows;
 
 // ─── Primitive helpers ───────────────────────────────────────────────────────
 
-// Box from min/max bounds — walls with openings become simple segment lists
 function BB({ min, max, mat, castShadow = false, receiveShadow = true }) {
   const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-  const pos  = [(max[0] + min[0]) / 2, (max[1] + min[1]) / 2, (max[2] + min[2]) / 2];
+  const pos = [(max[0] + min[0]) / 2, (max[1] + min[1]) / 2, (max[2] + min[2]) / 2];
   return (
     <mesh position={pos} castShadow={castShadow && SHADOWS} receiveShadow={receiveShadow && SHADOWS} material={mat}>
       <boxGeometry args={size} />
@@ -72,65 +81,99 @@ function Box({ pos, size, mat, rot, castShadow = false, receiveShadow = true }) 
   );
 }
 
-// Window inside an X-running wall (wall plane at fixed z): sill + lintel + glass
-function WinX({ x0, x1, y0, y1, z0, z1, yb, yt, mat }) {
-  const zc = (z0 + z1) / 2;
-  return (
-    <>
-      <BB min={[x0, yb, z0]} max={[x1, y0, z1]} mat={mat} castShadow />
-      <BB min={[x0, y1, z0]} max={[x1, yt, z1]} mat={mat} castShadow />
-      {/* frame + glass */}
-      <BB min={[x0, y0, zc - 0.04]} max={[x1, y1, zc + 0.04]} mat={MAT.frame} />
-      <BB min={[x0 + 0.06, y0 + 0.06, zc - 0.015]} max={[x1 - 0.06, y1 - 0.06, zc + 0.015]} mat={MAT.glass} receiveShadow={false} />
-    </>
-  );
+// Straight wall with openings.
+//   along: 'x' → wall runs along X, thickness spans z ∈ [t0, t1]
+//          'z' → wall runs along Z, thickness spans x ∈ [t0, t1]
+//   open:  [{ a, b, bottom = y0, top, glass, mullions }]
+//          a doorway has bottom = y0 and no glass; a window/fixed pane has glass.
+function Wall({ along = 'x', from, to, t0, t1, y0, y1, mat, open = [] }) {
+  const box = (a, b, ya, yb) =>
+    along === 'x'
+      ? { min: [a, ya, t0], max: [b, yb, t1] }
+      : { min: [t0, ya, a], max: [t1, yb, b] };
+  // a thin slab centred in the wall thickness
+  const tc = (t0 + t1) / 2;
+  const thin = (a, b, ya, yb, half) =>
+    along === 'x'
+      ? { min: [a, ya, tc - half], max: [b, yb, tc + half] }
+      : { min: [tc - half, ya, a], max: [tc + half, yb, b] };
+
+  const parts = [];
+  let cur = from;
+  let k = 0;
+  for (const o of [...open].sort((p, q) => p.a - q.a)) {
+    const bottom = o.bottom ?? y0;
+    if (o.a > cur + 1e-3) parts.push(<BB key={k++} {...box(cur, o.a, y0, y1)} mat={mat} castShadow />);
+    if (bottom > y0 + 1e-3) parts.push(<BB key={k++} {...box(o.a, o.b, y0, bottom)} mat={mat} castShadow />);
+    if (o.top < y1 - 1e-3) parts.push(<BB key={k++} {...box(o.a, o.b, o.top, y1)} mat={mat} castShadow />);
+    if (o.glass) {
+      const f = 0.05; // black steel profile
+      parts.push(<BB key={k++} {...thin(o.a, o.b, bottom, bottom + f, 0.04)} mat={MAT.frame} />);
+      parts.push(<BB key={k++} {...thin(o.a, o.b, o.top - f, o.top, 0.04)} mat={MAT.frame} />);
+      parts.push(<BB key={k++} {...thin(o.a, o.a + f, bottom, o.top, 0.04)} mat={MAT.frame} />);
+      parts.push(<BB key={k++} {...thin(o.b - f, o.b, bottom, o.top, 0.04)} mat={MAT.frame} />);
+      const n = o.mullions ?? Math.max(0, Math.round((o.b - o.a) / 0.9) - 1);
+      for (let i = 1; i <= n; i++) {
+        const m = o.a + ((o.b - o.a) * i) / (n + 1);
+        parts.push(<BB key={k++} {...thin(m - 0.025, m + 0.025, bottom, o.top, 0.035)} mat={MAT.frame} />);
+      }
+      parts.push(
+        <BB key={k++} {...thin(o.a + f, o.b - f, bottom + f, o.top - f, 0.012)} mat={MAT.glass} receiveShadow={false} />
+      );
+    }
+    cur = o.b;
+  }
+  if (to > cur + 1e-3) parts.push(<BB key={k++} {...box(cur, to, y0, y1)} mat={mat} castShadow />);
+  return <>{parts}</>;
 }
 
-// Window inside a Z-running wall (wall plane at fixed x)
-function WinZ({ z0, z1, y0, y1, x0, x1, yb, yt, mat }) {
-  const xc = (x0 + x1) / 2;
-  return (
-    <>
-      <BB min={[x0, yb, z0]} max={[x1, y0, z1]} mat={mat} castShadow />
-      <BB min={[x0, y1, z0]} max={[x1, yt, z1]} mat={mat} castShadow />
-      <BB min={[xc - 0.04, y0, z0]} max={[xc + 0.04, y1, z1]} mat={MAT.frame} />
-      <BB min={[xc - 0.015, y0 + 0.06, z0 + 0.06]} max={[xc + 0.015, y1 - 0.06, z1 - 0.06]} mat={MAT.glass} receiveShadow={false} />
-    </>
-  );
-}
+// Window / door shorthands
+const win = (a, b, bottom, top) => ({ a, b, bottom, top, glass: true });
+const door = (a, b, y) => ({ a, b, bottom: y, top: y + DOOR });
 
 // ─── Stairs ──────────────────────────────────────────────────────────────────
 
 function Stairs() {
   return (
     <>
-      {Array.from({ length: STAIR_STEPS }, (_, i) => (
-        <Box
-          key={i}
-          pos={[STAIR_X0 + (i + 0.5) * STAIR_RUN, F1 + i * STAIR_RISE + STAIR_RISE / 2, STAIR_ZC]}
-          size={[STAIR_RUN, STAIR_RISE, STAIR_W]}
-          mat={MAT.woodLight}
-          castShadow
-        />
-      ))}
-      {/* closed stringer under the steps (matches the wooden stair volume in renders) */}
-      <Box pos={[STAIR_X0 + (STAIR_STEPS * STAIR_RUN) / 2, F1 + (F2 - F1) / 2 - 0.35, STAIR_ZC]}
-           rot={[0, 0, Math.atan2(F2 - F1, STAIR_STEPS * STAIR_RUN)]}
-           size={[Math.hypot(STAIR_STEPS * STAIR_RUN, F2 - F1), 0.12, STAIR_W]}
-           mat={MAT.wood} castShadow />
-      {/* invisible ramp collider along the step noses — the character controller
-          climbs this as a 32° slope; rapier autostep alone stalls on the risers.
-          NOTE: must be an explicit collider — invisible meshes generate none. */}
-      <CuboidCollider
-        args={[2.64, 0.03, STAIR_W / 2]}
-        position={[-0.34, 1.57, STAIR_ZC]}
-        rotation={[0, 0, Math.atan2(F2 - F1, STAIR_STEPS * STAIR_RUN)]}
-      />
+      {/* solid stepped mass (closed underside = recibidor storage in the section) */}
+      {Array.from({ length: STAIR_STEPS }, (_, i) => {
+        const xHi = STAIR_X0 - i * STAIR_RUN;
+        const xLo = xHi - STAIR_RUN;
+        const top = F1 + (i + 1) * STAIR_RISE;
+        return (
+          <group key={i}>
+            <BB min={[xLo, F1, STAIR_Z0]} max={[xHi, top - 0.04, STAIR_Z1]} mat={MAT.adobe} castShadow />
+            <BB min={[xLo - 0.02, top - 0.04, STAIR_Z0]} max={[xHi, top, STAIR_Z1 + 0.02]} mat={MAT.woodLight} />
+          </group>
+        );
+      })}
+      {/* Invisible ramp collider along the step noses — the character controller
+          climbs it as a 38° slope; rapier autostep alone stalls on risers.
+          Line: (x0 + run, F1) → (x0 - 12·run, F2). Must be explicit — invisible
+          meshes generate no collider. */}
+      {(() => {
+        const xa = STAIR_X0 + STAIR_RUN;
+        const xb = STAIR_X0 - (STAIR_STEPS - 1) * STAIR_RUN;
+        const len = Math.hypot(xa - xb, F2 - F1);
+        const th = 0.03;
+        return (
+          <CuboidCollider
+            args={[len / 2, th, (STAIR_Z1 - STAIR_Z0) / 2]}
+            position={[
+              (xa + xb) / 2 - th * Math.sin(STAIR_ANGLE),
+              (F1 + F2) / 2 - th * Math.cos(STAIR_ANGLE),
+              STAIR_ZC,
+            ]}
+            rotation={[0, 0, -STAIR_ANGLE]}
+          />
+        );
+      })()}
     </>
   );
 }
 
-// Wooden guardrail: horizontal run along X or Z with posts + two rails
+// Wooden guardrail: horizontal run with posts + two rails
 function Rail({ from, to, yBase }) {
   const dx = to[0] - from[0];
   const dz = to[1] - from[1];
@@ -154,7 +197,14 @@ function Rail({ from, to, yBase }) {
   );
 }
 
-// ─── Ground floor ────────────────────────────────────────────────────────────
+// ─── Planta baja (+0.20) ─────────────────────────────────────────────────────
+//   EXTRA    x[-4.78,-1.73] z[-3.30,-0.10]   │ SERVICIO x[-1.53,1.53] z[-3.30,-2.00] │ COMEDOR x[1.73,4.78] z[-3.30,-0.10]
+//   ESTUDIO  x[-4.78,-1.73] z[ 0.10, 3.30]   │ COCINA   x[-1.53,1.53] z[-1.82, 0.62] │ SALA    x[1.73,4.78] z[ 0.10, 3.30]
+//   BAÑO     x[-2.94,-1.73] z[ 2.95, 4.21]   │ ESCALERA x[-1.53,1.53] z[ 0.82, 1.82] │
+//   (projects 0.9 m into the portal)         │ VESTÍBULO              z[ 1.82, 3.30] │
+
+const WIN1 = [0.7, 2.2];   // ground-floor window sill / head
+const WIN2 = [3.5, 4.7];   // upper-floor window sill / head
 
 function GroundFloor() {
   return (
@@ -162,278 +212,299 @@ function GroundFloor() {
       {/* Slab (walking surface at y = F1) */}
       <BB min={[-hw, 0, -hd]} max={[hw, F1, hd]} mat={MAT.concrete} />
 
-      {/* ── FRONT wall (z = hd) — entry + windows, chimney zone solid ── */}
-      <BB min={[-hw, F1, hd - T]}  max={[-4.5, C1, hd]} mat={MAT.adobe} castShadow />
-      <WinX x0={-4.5} x1={-3.6} y0={1.4} y1={2.2} yb={F1} yt={C1} z0={hd - T} z1={hd} mat={MAT.adobe} />
-      <BB min={[-3.6, F1, hd - T]} max={[-2.9, C1, hd]} mat={MAT.adobe} castShadow />
-      <WinX x0={-2.9} x1={-1.5} y0={0.8} y1={2.3} yb={F1} yt={C1} z0={hd - T} z1={hd} mat={MAT.adobe} />
-      <BB min={[-1.5, F1, hd - T]} max={[-0.9, C1, hd]} mat={MAT.adobe} castShadow />
-      {/* entry opening x ∈ [-0.9, 0.9]: lintel + black steel frame posts */}
-      <BB min={[-0.9, 2.3, hd - T]} max={[0.9, C1, hd]} mat={MAT.adobe} castShadow />
-      <BB min={[-0.9, F1, hd - T]}  max={[-0.82, 2.3, hd]} mat={MAT.frame} />
-      <BB min={[0.82, F1, hd - T]}  max={[0.9, 2.3, hd]}  mat={MAT.frame} />
-      <BB min={[0.9, F1, hd - T]}   max={[2.3, C1, hd]}   mat={MAT.adobe} castShadow />
-      <BB min={[2.3, F1, hd - T]}   max={[2.6, C1, hd]}   mat={MAT.adobe} castShadow />
-      <WinX x0={2.6} x1={4.3} y0={0.8} y1={2.3} yb={F1} yt={C1} z0={hd - T} z1={hd} mat={MAT.adobe} />
-      <BB min={[4.3, F1, hd - T]}   max={[hw, C1, hd]}    mat={MAT.adobe} castShadow />
+      {/* ── FRONT (z = +3.5): estudio wall · baño volume · glass entry · chimney · sala wall ── */}
+      <Wall along="x" from={-hw} to={-3.135} t0={id} t1={hd} y0={F1} y1={C1} mat={MAT.adobe} />
+      {/* entry: 2.90 m steel-and-glass front, sliding pair in the middle */}
+      <Wall along="x" from={-a0} to={a0} t0={id} t1={hd} y0={F1} y1={C1} mat={MAT.adobe}
+            open={[win(-1.375, -0.6, F1, 2.25), door(-0.6, 0.9, F1), win(0.9, a0, F1, 2.25)]} />
+      <BB min={[-0.6, F1, id + 0.06]} max={[-0.55, 2.25, hd - 0.06]} mat={MAT.frame} />
+      <BB min={[0.85, F1, id + 0.06]} max={[0.9, 2.25, hd - 0.06]} mat={MAT.frame} />
+      <Wall along="x" from={2.625} to={hw} t0={id} t1={hd} y0={F1} y1={C1} mat={MAT.adobe} />
 
-      {/* ── BACK wall (z = -hd) ── */}
-      <BB min={[-hw, F1, -hd]} max={[-3.4, C1, -hd + T]} mat={MAT.adobe} castShadow />
-      <WinX x0={-3.4} x1={-1.2} y0={0.9} y1={2.3} yb={F1} yt={C1} z0={-hd} z1={-hd + T} mat={MAT.adobe} />
-      <BB min={[-1.2, F1, -hd]} max={[1.2, C1, -hd + T]} mat={MAT.adobe} castShadow />
-      <WinX x0={1.2} x1={3.6} y0={1.1} y1={2.3} yb={F1} yt={C1} z0={-hd} z1={-hd + T} mat={MAT.adobe} />
-      <BB min={[3.6, F1, -hd]} max={[hw, C1, -hd + T]} mat={MAT.adobe} castShadow />
+      {/* Baño volume (stone, projects into the portal) */}
+      <Wall along="z" from={2.75} to={4.41} t0={-3.135} t1={-2.935} y0={F1} y1={C1} mat={MAT.stone} />
+      <Wall along="z" from={2.75} to={4.41} t0={-a1} t1={-a0} y0={F1} y1={C1} mat={MAT.stone} />
+      <Wall along="x" from={-3.135} to={-a0} t0={4.21} t1={4.41} y0={F1} y1={C1} mat={MAT.stone}
+            open={[win(-2.6, -2.0, 1.5, 2.1)]} />
+      <Wall along="x" from={-2.935} to={-a1} t0={2.75} t1={2.95} y0={F1} y1={C1} mat={MAT.stone}
+            open={[door(-2.45, -a1, F1)]} />
 
-      {/* ── LEFT wall (x = -hw) ── */}
-      <BB min={[-hw, F1, -hd]} max={[-hw + T, C1, -2.8]} mat={MAT.adobeSide} castShadow />
-      <WinZ z0={-2.8} z1={-0.6} y0={0.8} y1={2.3} yb={F1} yt={C1} x0={-hw} x1={-hw + T} mat={MAT.adobeSide} />
-      <BB min={[-hw, F1, -0.6]} max={[-hw + T, C1, hd]} mat={MAT.adobeSide} castShadow />
-
-      {/* ── RIGHT wall (x = hw) — celosía (perforated brick lattice) + window ── */}
-      <BB min={[hw - T, F1, -hd]} max={[hw, C1, -1.8]} mat={MAT.adobeSide} castShadow />
-      {/* celosía zone z ∈ [-1.8, 0.2], y ∈ [0.9, 2.15] */}
-      <BB min={[hw - T, F1, -1.8]}  max={[hw, 0.9, 0.2]} mat={MAT.adobeSide} castShadow />
-      <BB min={[hw - T, 2.15, -1.8]} max={[hw, C1, 0.2]} mat={MAT.adobeSide} castShadow />
-      {Array.from({ length: 5 }, (_, r) =>
-        Array.from({ length: 8 }, (_, c) =>
+      {/* ── BACK (z = -3.5): solid, celosía (perforated brick lattice) on servicio ── */}
+      <Wall along="x" from={-hw} to={hw} t0={-hd} t1={-id} y0={F1} y1={C1} mat={MAT.adobe}
+            open={[{ a: -a0, b: a0, bottom: 0.6, top: 2.1 }]} />
+      {Array.from({ length: 6 }, (_, r) =>
+        Array.from({ length: 12 }, (_, c) =>
           (r + c) % 2 === 0 ? (
             <Box key={`cel${r}-${c}`}
-                 pos={[hw - T / 2, 0.9 + r * 0.25 + 0.125, -1.8 + c * 0.25 + 0.125]}
-                 size={[T, 0.25, 0.25]} mat={MAT.adobeSide} castShadow />
+                 pos={[-a0 + (c + 0.5) * (2 * a0 / 12), 0.6 + (r + 0.5) * 0.25, -hd + T / 2]}
+                 size={[2 * a0 / 12, 0.25, T]} mat={MAT.adobeSide} castShadow />
           ) : null
         )
       )}
-      <BB min={[hw - T, F1, 0.2]} max={[hw, C1, 1.4]} mat={MAT.adobeSide} castShadow />
-      <WinZ z0={1.4} z1={3.0} y0={0.8} y1={2.3} yb={F1} yt={C1} x0={hw - T} x1={hw} mat={MAT.adobeSide} />
-      <BB min={[hw - T, F1, 3.0]} max={[hw, C1, hd]} mat={MAT.adobeSide} castShadow />
 
-      {/* ── Interior: bathroom (stone, front-left corner) ── */}
-      <BB min={[-hw + T, F1, 1.78]} max={[-3.2, C1, 1.9]} mat={MAT.stone} castShadow />
-      <BB min={[-3.32, F1, 1.9]} max={[-3.2, C1, 2.3]} mat={MAT.stone} castShadow />
-      <BB min={[-3.32, 2.3, 2.3]} max={[-3.2, C1, 3.1]} mat={MAT.stone} />
-      <BB min={[-3.32, F1, 3.1]} max={[-3.2, C1, hd - T]} mat={MAT.stone} castShadow />
-      {/* fixtures */}
-      <Box pos={[-4.4, 0.45, 3.3]} size={[0.45, 0.5, 0.65]} mat={MAT.white} />
-      <Box pos={[-4.5, 0.85, 2.3]} size={[0.5, 0.12, 0.5]} mat={MAT.white} />
-      <Box pos={[-4.5, 0.5, 2.3]} size={[0.18, 0.6, 0.18]} mat={MAT.stone} />
+      {/* ── LEFT / RIGHT (two 2.00 m windows each, per plan side dims) ── */}
+      <Wall along="z" from={-hd} to={hd} t0={-hw} t1={-iw} y0={F1} y1={C1} mat={MAT.adobeSide}
+            open={[win(-2.75, -0.75, ...WIN1), win(0.75, 2.75, ...WIN1)]} />
+      <Wall along="z" from={-hd} to={hd} t0={iw} t1={hw} y0={F1} y1={C1} mat={MAT.adobeSide}
+            open={[win(-2.7, -0.75, ...WIN1), win(0.75, 2.75, ...WIN1)]} />
 
-      {/* ── Interior: partition estudio / stair zone ── */}
-      <BB min={[-1.6, F1, -hd + T]} max={[-1.4, C1, -1.2]} mat={MAT.adobe} castShadow />
+      {/* ── Interior partitions ── */}
+      {/* extra | estudio — 2.05 wall + 1.00 opening by axis 2 */}
+      <Wall along="x" from={-iw} to={-2.725} t0={-0.1} t1={0.1} y0={F1} y1={C1} mat={MAT.adobe} />
+      {/* axis 2: extra/estudio | servicio/cocina/escalera — estudio door from the vestíbulo */}
+      <Wall along="z" from={-id} to={2.75} t0={-a1} t1={-a0} y0={F1} y1={C1} mat={MAT.adobe}
+            open={[door(1.85, 2.7, F1)]} />
+      {/* axis 3: servicio→comedor door, cocina→comedor opening; open to sala in front */}
+      <Wall along="z" from={-id} to={STAIR_Z0} t0={a0} t1={a1} y0={F1} y1={C1} mat={MAT.adobe}
+            open={[door(-2.75, -2.0, F1), door(-1.19, -0.08, F1)]} />
+      {/* servicio | cocina */}
+      <Wall along="x" from={-a0} to={a0} t0={-2.0} t1={-1.82} y0={F1} y1={C1} mat={MAT.adobe} />
+      {/* cocina | escalera */}
+      <Wall along="x" from={-a0} to={a0} t0={0.62} t1={STAIR_Z0} y0={F1} y1={C1} mat={MAT.adobe} />
+      {/* comedor | sala — wall stubs + low sideboard */}
+      <Wall along="x" from={2.75} to={3.2} t0={-0.1} t1={0.1} y0={F1} y1={C1} mat={MAT.adobe} />
+      <Wall along="x" from={4.4} to={iw} t0={-0.1} t1={0.1} y0={F1} y1={C1} mat={MAT.adobe} />
+      <Box pos={[3.8, F1 + 0.4, 0.05]} size={[1.2, 0.8, 0.45]} mat={MAT.woodLight} castShadow />
 
       {/* ── Stairs ── */}
       <Stairs />
 
-      {/* ── Kitchen (back-right, red cabinets per renders) ── */}
-      <Box pos={[2.65, 0.65, -3.25]} size={[4.1, 0.9, 0.6]} mat={MAT.kitchenRed} castShadow />
-      <Box pos={[2.65, 1.13, -3.25]} size={[4.2, 0.06, 0.7]} mat={MAT.woodLight} />
-      <Box pos={[4.4, 1.1, -3.2]}  size={[0.7, 1.8, 0.65]} mat={MAT.white} castShadow />
-      {/* island */}
-      <Box pos={[2.4, 0.65, -2.1]} size={[1.6, 0.9, 0.7]} mat={MAT.kitchenRed} castShadow />
-      <Box pos={[2.4, 1.13, -2.1]} size={[1.7, 0.06, 0.8]} mat={MAT.woodLight} />
-
-      {/* ── Game room / estudio (left): pool table + piano ── */}
-      <Box pos={[-3.4, 0.62, -1.8]} size={[2.2, 0.28, 1.2]} mat={MAT.wood} castShadow />
-      <Box pos={[-3.4, 0.79, -1.8]} size={[2.1, 0.06, 1.1]} mat={MAT.poolGreen} />
-      {[[-4.3, -2.25], [-2.5, -2.25], [-4.3, -1.35], [-2.5, -1.35]].map(([x, z], i) => (
-        <Box key={`pl${i}`} pos={[x, 0.28, z]} size={[0.14, 0.56, 0.14]} mat={MAT.wood} />
+      {/* ── EXTRA: pool table + piano (per renders) ── */}
+      <Box pos={[-3.0, 0.62, -1.45]} size={[2.2, 0.28, 1.2]} mat={MAT.wood} castShadow />
+      <Box pos={[-3.0, 0.79, -1.45]} size={[2.1, 0.06, 1.1]} mat={MAT.poolGreen} />
+      {[[-3.9, -1.9], [-2.1, -1.9], [-3.9, -1.0], [-2.1, -1.0]].map(([x, z], i) => (
+        <Box key={`pl${i}`} pos={[x, F1 + 0.14, z]} size={[0.14, 0.28, 0.14]} mat={MAT.wood} />
       ))}
-      <Box pos={[-3.6, 0.75, -3.35]} size={[1.5, 1.1, 0.6]} mat={MAT.black} castShadow />
-      <Box pos={[-3.6, 0.3, -2.75]} size={[0.7, 0.5, 0.35]} mat={MAT.black} />
+      <Box pos={[-3.9, F1 + 0.55, -3.0]} size={[1.5, 1.1, 0.6]} mat={MAT.black} castShadow />
+      <Box pos={[-3.9, F1 + 0.25, -2.5]} size={[0.7, 0.5, 0.35]} mat={MAT.black} />
 
-      {/* ── Sala (front-right): sofa + coffee table ── */}
-      <Box pos={[3.0, 0.45, 3.0]} size={[1.9, 0.5, 0.8]} mat={MAT.fabric} castShadow />
-      <Box pos={[3.0, 0.85, 3.3]} size={[1.9, 0.55, 0.25]} mat={MAT.fabric} />
-      <Box pos={[2.0, 0.65, 3.0]} size={[0.25, 0.55, 0.8]} mat={MAT.fabric} />
-      <Box pos={[4.0, 0.65, 3.0]} size={[0.25, 0.55, 0.8]} mat={MAT.fabric} />
-      <Box pos={[3.0, 0.42, 1.9]} size={[0.95, 0.34, 0.5]} mat={MAT.woodLight} castShadow />
+      {/* ── ESTUDIO: desk + chair ── */}
+      <Box pos={[-3.6, F1 + 0.375, 1.6]} size={[1.5, 0.75, 0.7]} mat={MAT.woodLight} castShadow />
+      <Box pos={[-3.6, F1 + 0.45, 2.25]} size={[0.5, 0.9, 0.5]} mat={MAT.black} />
 
-      {/* ── Comedor (mid-right): table + 4 chairs ── */}
-      <Box pos={[3.5, 0.93, 0.6]} size={[1.4, 0.08, 0.9]} mat={MAT.woodLight} castShadow />
-      <Box pos={[3.5, 0.55, 0.6]} size={[0.18, 0.7, 0.18]} mat={MAT.wood} />
-      {[[2.95, 1.25], [4.05, 1.25], [2.95, -0.05], [4.05, -0.05]].map(([x, z], i) => (
-        <Box key={`ch${i}`} pos={[x, 0.45, z]} size={[0.42, 0.85, 0.42]} mat={MAT.woodLight} />
+      {/* ── BAÑO PB: toilet + sink ── */}
+      <Box pos={[-2.6, F1 + 0.225, 3.9]} size={[0.4, 0.45, 0.6]} mat={MAT.white} />
+      <Box pos={[-2.7, F1 + 0.8, 3.3]} size={[0.45, 0.1, 0.5]} mat={MAT.white} />
+      <Box pos={[-2.7, F1 + 0.38, 3.3]} size={[0.16, 0.75, 0.16]} mat={MAT.stone} />
+
+      {/* ── COCINA: two parallel runs 0.60 + 1.20 aisle + 0.60 (red fronts) ── */}
+      <Box pos={[-0.26, F1 + 0.45, -1.52]} size={[2.52, 0.9, 0.6]} mat={MAT.kitchenRed} castShadow />
+      <Box pos={[-0.26, F1 + 0.93, -1.5]} size={[2.56, 0.06, 0.66]} mat={MAT.woodLight} />
+      <Box pos={[1.26, F1 + 0.9, -1.5]} size={[0.52, 1.8, 0.62]} mat={MAT.white} castShadow />
+      <Box pos={[0.26, F1 + 0.45, 0.32]} size={[2.52, 0.9, 0.6]} mat={MAT.kitchenRed} castShadow />
+      <Box pos={[0.26, F1 + 0.93, 0.3]} size={[2.56, 0.06, 0.66]} mat={MAT.woodLight} />
+      <Box pos={[0.3, F1 + 0.97, 0.3]} size={[0.6, 0.02, 0.5]} mat={MAT.black} />
+
+      {/* ── SERVICIO: washer + laundry sink ── */}
+      <Box pos={[-0.9, F1 + 0.45, -2.95]} size={[0.6, 0.9, 0.6]} mat={MAT.white} />
+      <Box pos={[0.0, F1 + 0.45, -2.95]} size={[0.6, 0.9, 0.6]} mat={MAT.concrete} />
+
+      {/* ── COMEDOR: table + 4 chairs ── */}
+      <Box pos={[3.25, F1 + 0.74, -1.9]} size={[1.4, 0.06, 0.9]} mat={MAT.woodLight} castShadow />
+      <Box pos={[3.25, F1 + 0.36, -1.9]} size={[0.18, 0.72, 0.18]} mat={MAT.wood} />
+      {[[2.85, -2.6], [3.65, -2.6], [2.85, -1.2], [3.65, -1.2]].map(([x, z], i) => (
+        <Box key={`ch${i}`} pos={[x, F1 + 0.425, z]} size={[0.42, 0.85, 0.42]} mat={MAT.woodLight} />
       ))}
+
+      {/* ── SALA: sofa against the front wall, coffee table, armchair, hearth ── */}
+      <Box pos={[3.3, F1 + 0.25, 2.92]} size={[1.9, 0.5, 0.75]} mat={MAT.fabric} castShadow />
+      <Box pos={[3.3, F1 + 0.65, 3.18]} size={[1.9, 0.55, 0.22]} mat={MAT.fabric} />
+      <Box pos={[2.24, F1 + 0.45, 2.92]} size={[0.22, 0.55, 0.75]} mat={MAT.fabric} />
+      <Box pos={[4.36, F1 + 0.45, 2.92]} size={[0.22, 0.55, 0.75]} mat={MAT.fabric} />
+      <Box pos={[3.3, F1 + 0.22, 1.95]} size={[0.95, 0.44, 0.5]} mat={MAT.woodLight} castShadow />
+      <Box pos={[4.4, F1 + 0.25, 1.3]} size={[0.7, 0.5, 0.75]} mat={MAT.fabric} />
     </>
   );
 }
 
-// ─── Second floor ────────────────────────────────────────────────────────────
+// ─── Planta alta (+2.60) ─────────────────────────────────────────────────────
+//   DORM. 2  x[-4.78,-1.73] z[-3.30,-0.10] │ DORM. 1 x[-1.53,1.53] z[-3.30,0.62] │ BAÑO x[1.73,3.03] z[-3.30,-1.31]
+//                                          │                                     │ VESTIDOR x[1.73,4.78] z[-3.30,-0.10]
+//   BAÑO 2   x[-4.78,-3.13] z[ 0.10, 3.30] │ HUECO   x[-1.53,1.53] z[0.82,1.86]  │ MASTER  x[1.73,4.78] z[0.10,3.30]
+//   PASILLO  x[-2.93,-1.73] z[ 0.10, 3.30] │ HALL    x[-1.53,1.53] z[1.86,3.30]  │
+//   BALCÓN   x[-3.14, 1.53] z[ 3.50, 4.41]
 
 function SecondFloor() {
   return (
     <>
       {/* Slab pieces around the stairwell opening */}
-      <BB min={[-hw, C1, -hd]}      max={[HOLE.x0, F2, hd]}      mat={MAT.woodFloor} />
-      <BB min={[HOLE.x1, C1, -hd]}  max={[hw, F2, hd]}           mat={MAT.woodFloor} />
-      <BB min={[HOLE.x0, C1, -hd]}  max={[HOLE.x1, F2, HOLE.z0]} mat={MAT.woodFloor} />
-      <BB min={[HOLE.x0, C1, HOLE.z1]} max={[HOLE.x1, F2, hd]}   mat={MAT.woodFloor} />
+      <BB min={[-hw, C1, -hd]}         max={[HOLE.x0, F2, hd]}      mat={MAT.woodFloor} />
+      <BB min={[HOLE.x1, C1, -hd]}     max={[hw, F2, hd]}           mat={MAT.woodFloor} />
+      <BB min={[HOLE.x0, C1, -hd]}     max={[HOLE.x1, F2, HOLE.z0]} mat={MAT.woodFloor} />
+      <BB min={[HOLE.x0, C1, HOLE.z1]} max={[HOLE.x1, F2, hd]}      mat={MAT.woodFloor} />
 
-      {/* Guardrail around the stairwell (3 sides; arrival side open) */}
-      <Rail from={[HOLE.x0, HOLE.z1]} to={[HOLE.x1, HOLE.z1]} yBase={F2} />
-      <Rail from={[HOLE.x0, HOLE.z0]} to={[HOLE.x0, HOLE.z1]} yBase={F2} />
-      <Rail from={[HOLE.x0, HOLE.z0]} to={[HOLE.x1, HOLE.z0]} yBase={F2} />
+      {/* Guardrail on the open (hall) side of the stairwell; arrival end open */}
+      <Rail from={[HOLE.x0 + STAIR_RUN + 0.04, HOLE.z1 + 0.04]} to={[HOLE.x1, HOLE.z1 + 0.04]} yBase={F2} />
 
       {/* Ceiling */}
-      <BB min={[-hw + T, C2, -hd + T]} max={[hw - T, C2 + 0.1, hd - T]} mat={MAT.ceiling} />
+      <BB min={[-iw, C2, -id]} max={[iw, C2 + 0.1, id]} mat={MAT.ceiling} />
 
-      {/* ── FRONT wall (z = hd): balcony door + bedroom windows ── */}
-      <BB min={[-hw, F2, hd - T]} max={[-4.3, C2, hd]} mat={MAT.adobe} castShadow />
-      <WinX x0={-4.3} x1={-1.3} y0={3.4} y1={5.1} yb={F2} yt={C2} z0={hd - T} z1={hd} mat={MAT.adobe} />
-      <BB min={[-1.3, F2, hd - T]} max={[-0.8, C2, hd]} mat={MAT.adobe} castShadow />
-      {/* balcony door opening x ∈ [-0.8, 0.8] */}
-      <BB min={[-0.8, 5.1, hd - T]} max={[0.8, C2, hd]} mat={MAT.adobe} />
-      <BB min={[-0.8, F2, hd - T]} max={[-0.72, 5.1, hd]} mat={MAT.frame} />
-      <BB min={[0.72, F2, hd - T]} max={[0.8, 5.1, hd]} mat={MAT.frame} />
-      <BB min={[0.8, F2, hd - T]} max={[2.7, C2, hd]} mat={MAT.adobe} castShadow />
-      <WinX x0={2.7} x1={4.4} y0={3.4} y1={5.1} yb={F2} yt={C2} z0={hd - T} z1={hd} mat={MAT.adobe} />
-      <BB min={[4.4, F2, hd - T]} max={[hw, C2, hd]} mat={MAT.adobe} castShadow />
+      {/* ── FRONT: pasillo window · balcony glazing with sliding door · chimney · solid ── */}
+      <Wall along="x" from={-hw} to={a0} t0={id} t1={hd} y0={F2} y1={WT} mat={MAT.adobe}
+            open={[win(-2.81, -1.88, ...WIN2), win(-1.375, -0.6, F2, F2 + 2.1),
+                   door(-0.6, 0.9, F2), win(0.9, a0, F2, F2 + 2.1)]} />
+      <BB min={[-0.6, F2, id + 0.06]} max={[-0.55, F2 + 2.1, hd - 0.06]} mat={MAT.frame} />
+      <BB min={[0.85, F2, id + 0.06]} max={[0.9, F2 + 2.1, hd - 0.06]} mat={MAT.frame} />
+      <Wall along="x" from={2.625} to={hw} t0={id} t1={hd} y0={F2} y1={WT} mat={MAT.adobe} />
 
-      {/* ── BACK wall ── */}
-      <BB min={[-hw, F2, -hd]} max={[-4.2, C2, -hd + T]} mat={MAT.adobe} castShadow />
-      <WinX x0={-4.2} x1={-2.0} y0={3.4} y1={5.1} yb={F2} yt={C2} z0={-hd} z1={-hd + T} mat={MAT.adobe} />
-      <BB min={[-2.0, F2, -hd]} max={[-0.9, C2, -hd + T]} mat={MAT.adobe} castShadow />
-      <WinX x0={-0.9} x1={0.1} y0={3.9} y1={4.9} yb={F2} yt={C2} z0={-hd} z1={-hd + T} mat={MAT.adobe} />
-      <BB min={[0.1, F2, -hd]} max={[2.4, C2, -hd + T]} mat={MAT.adobe} castShadow />
-      <WinX x0={2.4} x1={4.2} y0={3.4} y1={5.1} yb={F2} yt={C2} z0={-hd} z1={-hd + T} mat={MAT.adobe} />
-      <BB min={[4.2, F2, -hd]} max={[hw, C2, -hd + T]} mat={MAT.adobe} castShadow />
+      {/* ── BACK: central 2.00 m window (dormitorio 1) ── */}
+      <Wall along="x" from={-hw} to={hw} t0={-hd} t1={-id} y0={F2} y1={WT} mat={MAT.adobe}
+            open={[win(-1.0, 1.0, ...WIN2)]} />
 
-      {/* ── LEFT wall ── */}
-      <BB min={[-hw, F2, -hd]} max={[-hw + T, C2, -3.0]} mat={MAT.adobeSide} castShadow />
-      <WinZ z0={-3.0} z1={-1.9} y0={3.4} y1={5.1} yb={F2} yt={C2} x0={-hw} x1={-hw + T} mat={MAT.adobeSide} />
-      <BB min={[-hw, F2, -1.9]} max={[-hw + T, C2, 1.3]} mat={MAT.adobeSide} castShadow />
-      <WinZ z0={1.3} z1={2.9} y0={3.4} y1={5.1} yb={F2} yt={C2} x0={-hw} x1={-hw + T} mat={MAT.adobeSide} />
-      <BB min={[-hw, F2, 2.9]} max={[-hw + T, C2, hd]} mat={MAT.adobeSide} castShadow />
+      {/* ── LEFT / RIGHT ── */}
+      <Wall along="z" from={-hd} to={hd} t0={-hw} t1={-iw} y0={F2} y1={WT} mat={MAT.adobeSide}
+            open={[win(-2.75, -0.75, ...WIN2), win(0.75, 2.75, ...WIN2)]} />
+      <Wall along="z" from={-hd} to={hd} t0={iw} t1={hw} y0={F2} y1={WT} mat={MAT.adobeSide}
+            open={[win(-2.7, -0.75, ...WIN2), win(0.75, 2.75, ...WIN2)]} />
 
-      {/* ── RIGHT wall ── */}
-      <BB min={[hw - T, F2, -hd]} max={[hw, C2, -1.5]} mat={MAT.adobeSide} castShadow />
-      <WinZ z0={-1.5} z1={0.1} y0={3.4} y1={5.1} yb={F2} yt={C2} x0={hw - T} x1={hw} mat={MAT.adobeSide} />
-      <BB min={[hw - T, F2, 0.1]} max={[hw, C2, 1.8]} mat={MAT.adobeSide} castShadow />
-      <WinZ z0={1.8} z1={3.2} y0={3.4} y1={5.1} yb={F2} yt={C2} x0={hw - T} x1={hw} mat={MAT.adobeSide} />
-      <BB min={[hw - T, F2, 3.2]} max={[hw, C2, hd]} mat={MAT.adobeSide} castShadow />
-
-      {/* ── Partitions: back rooms (z = -1.9): dorm 1 | baño | vestidor ── */}
-      {/* dorm 1 door x ∈ [-2.8, -2.0] */}
-      <BB min={[-hw + T, F2, -2.0]} max={[-2.8, C2, -1.88]} mat={MAT.adobe} castShadow />
-      <BB min={[-2.8, 5.1, -2.0]} max={[-2.0, C2, -1.88]} mat={MAT.adobe} />
-      <BB min={[-2.0, F2, -2.0]} max={[-0.6, C2, -1.88]} mat={MAT.adobe} castShadow />
-      {/* baño door x ∈ [-0.6, 0.1] */}
-      <BB min={[-0.6, 5.1, -2.0]} max={[0.1, C2, -1.88]} mat={MAT.adobe} />
-      <BB min={[0.1, F2, -2.0]} max={[3.0, C2, -1.88]} mat={MAT.adobe} castShadow />
-      {/* vestidor door x ∈ [3.0, 3.8] */}
-      <BB min={[3.0, 5.1, -2.0]} max={[3.8, C2, -1.88]} mat={MAT.adobe} />
-      <BB min={[3.8, F2, -2.0]} max={[hw - T, C2, -1.88]} mat={MAT.adobe} castShadow />
-      {/* dividers between back rooms */}
-      <BB min={[-1.46, F2, -hd + T]} max={[-1.34, C2, -2.0]} mat={MAT.adobe} castShadow />
-      <BB min={[0.94, F2, -hd + T]} max={[1.06, C2, -2.0]} mat={MAT.adobe} castShadow />
-
-      {/* ── Partitions: front rooms (z = 1.4): dorm 2 | balcony pass | master ── */}
-      <BB min={[-hw + T, F2, 1.4]} max={[-2.2, C2, 1.52]} mat={MAT.adobe} castShadow />
-      {/* dorm 2 door x ∈ [-2.2, -1.4] */}
-      <BB min={[-2.2, 5.1, 1.4]} max={[-1.4, C2, 1.52]} mat={MAT.adobe} />
-      <BB min={[-1.4, F2, 1.4]} max={[-0.8, C2, 1.52]} mat={MAT.adobe} castShadow />
-      <BB min={[0.8, F2, 1.4]} max={[2.6, C2, 1.52]} mat={MAT.adobe} castShadow />
-      {/* master door x ∈ [2.6, 3.4] */}
-      <BB min={[2.6, 5.1, 1.4]} max={[3.4, C2, 1.52]} mat={MAT.adobe} />
-      <BB min={[3.4, F2, 1.4]} max={[hw - T, C2, 1.52]} mat={MAT.adobe} castShadow />
-      {/* side walls of the balcony passage */}
-      <BB min={[-0.86, F2, 1.52]} max={[-0.74, C2, hd - T]} mat={MAT.adobe} castShadow />
-      <BB min={[0.74, F2, 1.52]} max={[0.86, C2, hd - T]} mat={MAT.adobe} castShadow />
+      {/* ── Partitions ── */}
+      {/* dormitorio 2 | baño 2 + pasillo (door by axis 2) */}
+      <Wall along="x" from={-iw} to={-a1} t0={-0.1} t1={0.1} y0={F2} y1={C2} mat={MAT.adobe}
+            open={[door(-2.55, -a1, F2)]} />
+      {/* axis 2: dorm 2 | dorm 1, then dorm-1 door from the pasillo, then open to the stair top */}
+      <Wall along="z" from={-id} to={-0.1} t0={-a1} t1={-a0} y0={F2} y1={C2} mat={MAT.adobe} />
+      <Wall along="z" from={2.84} to={id} t0={-a1} t1={-a0} y0={F2} y1={C2} mat={MAT.adobe} />
+      {/* dorm 1 front wall = back of the stairwell */}
+      <Wall along="x" from={-a1} to={a0} t0={0.62} t1={STAIR_Z0} y0={F2} y1={C2} mat={MAT.adobe} />
+      <BB min={[-a1, F2 + DOOR, -0.1]} max={[-a0, C2, 0.62]} mat={MAT.adobe} />
+      {/* baño 2 | pasillo (door at the hall end) */}
+      <Wall along="z" from={0.1} to={id} t0={-3.13} t1={-2.93} y0={F2} y1={C2} mat={MAT.adobe}
+            open={[door(0.1, 0.8, F2)]} />
+      {/* axis 3: dorm 1 | baño/vestidor, stairwell end, master door from the hall */}
+      <Wall along="z" from={-id} to={id} t0={a0} t1={a1} y0={F2} y1={C2} mat={MAT.adobe}
+            open={[door(1.86, 2.6, F2)]} />
+      {/* baño (master en-suite) */}
+      <Wall along="z" from={-id} to={-1.19} t0={3.03} t1={3.15} y0={F2} y1={C2} mat={MAT.adobe} />
+      <Wall along="x" from={a1} to={3.15} t0={-1.31} t1={-1.19} y0={F2} y1={C2} mat={MAT.adobe}
+            open={[door(2.3, 3.03, F2)]} />
+      {/* vestidor | master — 1.17 m opening by axis 3 */}
+      <Wall along="x" from={2.9} to={iw} t0={-0.1} t1={0.1} y0={F2} y1={C2} mat={MAT.adobe} />
 
       {/* ── Furniture ── */}
-      {/* master bed (front-right) */}
-      <Box pos={[3.0, F2 + 0.2, 2.7]} size={[1.8, 0.35, 1.6]} mat={MAT.woodLight} castShadow />
-      <Box pos={[3.0, F2 + 0.42, 2.7]} size={[1.7, 0.18, 1.5]} mat={MAT.white} />
-      <Box pos={[3.0, F2 + 0.75, 3.4]} size={[1.8, 0.7, 0.12]} mat={MAT.wood} />
-      {/* dorm 2 bed (front-left) */}
-      <Box pos={[-3.6, F2 + 0.2, 2.6]} size={[1.9, 0.35, 1.4]} mat={MAT.woodLight} castShadow />
-      <Box pos={[-3.6, F2 + 0.42, 2.6]} size={[1.8, 0.18, 1.3]} mat={MAT.white} />
-      {/* dorm 1 bed (back-left) */}
-      <Box pos={[-3.5, F2 + 0.2, -2.9]} size={[1.9, 0.35, 1.4]} mat={MAT.woodLight} castShadow />
-      <Box pos={[-3.5, F2 + 0.42, -2.9]} size={[1.8, 0.18, 1.3]} mat={MAT.white} />
-      {/* shared bathroom: tub + toilet + sink */}
-      <Box pos={[-0.7, F2 + 0.3, -3.25]} size={[1.2, 0.55, 0.7]} mat={MAT.white} />
-      <Box pos={[0.5, F2 + 0.25, -3.35]} size={[0.45, 0.5, 0.6]} mat={MAT.white} />
-      <Box pos={[0.6, F2 + 0.5, -2.4]} size={[0.5, 0.9, 0.4]} mat={MAT.stone} />
+      {/* dormitorio 2: bed along X, head to axis 2 + wardrobe */}
+      <Box pos={[-2.85, F2 + 0.18, -2.4]} size={[2.0, 0.35, 1.4]} mat={MAT.woodLight} castShadow />
+      <Box pos={[-2.9, F2 + 0.42, -2.4]} size={[1.9, 0.18, 1.3]} mat={MAT.white} />
+      <Box pos={[-1.8, F2 + 0.5, -2.4]} size={[0.08, 1.0, 1.45]} mat={MAT.wood} />
+      <Box pos={[-3.95, F2 + 1.1, -0.42]} size={[1.6, 2.2, 0.6]} mat={MAT.woodLight} castShadow />
+      {/* dormitorio 1: bed along X + closet against the stairwell wall */}
+      <Box pos={[0.41, F2 + 0.18, -1.9]} size={[2.0, 0.35, 1.4]} mat={MAT.woodLight} castShadow />
+      <Box pos={[0.36, F2 + 0.42, -1.9]} size={[1.9, 0.18, 1.3]} mat={MAT.white} />
+      <Box pos={[1.47, F2 + 0.5, -1.9]} size={[0.08, 1.0, 1.45]} mat={MAT.wood} />
+      <Box pos={[0.425, F2 + 1.1, 0.31]} size={[2.18, 2.2, 0.6]} mat={MAT.woodLight} castShadow />
+      {/* baño (en-suite): tub, toilet, sink */}
+      <Box pos={[2.38, F2 + 0.28, -2.92]} size={[1.28, 0.55, 0.74]} mat={MAT.white} />
+      <Box pos={[1.95, F2 + 0.25, -2.1]} size={[0.4, 0.5, 0.6]} mat={MAT.white} />
+      <Box pos={[1.95, F2 + 0.43, -1.55]} size={[0.42, 0.85, 0.4]} mat={MAT.stone} />
       {/* vestidor: wardrobes */}
-      <Box pos={[3.0, F2 + 1.1, -3.35]} size={[3.2, 2.2, 0.6]} mat={MAT.woodLight} castShadow />
-      <Box pos={[4.6, F2 + 1.1, -2.6]} size={[0.6, 2.2, 1.2]} mat={MAT.woodLight} />
+      <Box pos={[4.475, F2 + 1.1, -1.9]} size={[0.6, 2.2, 2.6]} mat={MAT.woodLight} castShadow />
+      <Box pos={[3.6, F2 + 1.1, -3.0]} size={[0.9, 2.2, 0.6]} mat={MAT.woodLight} />
+      {/* master: bed along Z, headboard on the front wall */}
+      <Box pos={[3.37, F2 + 0.18, 2.28]} size={[1.6, 0.35, 2.0]} mat={MAT.woodLight} castShadow />
+      <Box pos={[3.37, F2 + 0.42, 2.25]} size={[1.5, 0.18, 1.9]} mat={MAT.white} />
+      <Box pos={[3.37, F2 + 0.6, 3.24]} size={[1.7, 1.2, 0.08]} mat={MAT.wood} />
+      {/* baño 2: tub along the front wall, toilet, sink */}
+      <Box pos={[-3.95, F2 + 0.28, 2.9]} size={[1.55, 0.55, 0.74]} mat={MAT.white} />
+      <Box pos={[-4.45, F2 + 0.25, 1.6]} size={[0.6, 0.5, 0.4]} mat={MAT.white} />
+      <Box pos={[-4.5, F2 + 0.43, 0.6]} size={[0.45, 0.85, 0.5]} mat={MAT.stone} />
     </>
   );
 }
 
-// ─── Exterior: porch, balcony, pergolas, chimney, roof, garden ──────────────
+// ─── Exterior: portal, balcony, chimney, roofs, garden ───────────────────────
+
+const ROOF_HI = 5.8;    // side roofs, high edge at axes 2/3
+const ROOF_LO = 4.98;   // side roofs, eave (20 % over 4.09 m)
+const ROOF_SLOPE = Math.atan2(ROOF_HI - ROOF_LO, 4.09);
+const LANTERN_RIDGE = 6.04;
+const LANTERN_EAVE = 5.85;
 
 function Exterior() {
   return (
     <>
-      {/* Ground + stone path */}
+      {/* Ground + stone path to the entry */}
       <BB min={[-40, -0.2, -40]} max={[40, 0, 40]} mat={MAT.grass} />
-      <BB min={[-1.1, 0, 6.6]} max={[1.1, 0.04, 13]} mat={MAT.stone} />
+      <BB min={[-0.9, 0, 5.4]} max={[1.2, 0.04, 13]} mat={MAT.stone} />
 
-      {/* Porch slab */}
-      <BB min={[-2.8, 0, 3.75]} max={[2.8, 0.15, 6.6]} mat={MAT.concrete} />
+      {/* Portal slab (+0.20) */}
+      <BB min={[-3.135, 0, hd]} max={[2.625, F1, 5.4]} mat={MAT.concrete} />
+      {/* stone step along the portal front + invisible 14° ramp collider:
+          the capsule meets a 0.16–0.20 m edge at >45° and rapier autostep
+          stalls there, so the step is walked as a gentle slope instead */}
+      <BB min={[-3.135, 0, 5.4]} max={[2.625, 0.1, 5.75]} mat={MAT.stone} />
+      {(() => {
+        const z0 = 5.4, z1 = 6.2, th = 0.02;
+        const ang = Math.atan2(F1, z1 - z0);
+        return (
+          <CuboidCollider
+            args={[(2.625 + 3.135) / 2, th, Math.hypot(z1 - z0, F1) / 2]}
+            position={[(2.625 - 3.135) / 2, F1 / 2 - th * Math.cos(ang), (z0 + z1) / 2 - th * Math.sin(ang)]}
+            rotation={[ang, 0, 0]}
+          />
+        );
+      })()}
 
-      {/* Wooden posts supporting balcony + pergola (full height) */}
-      <Box pos={[-2.45, 2.85, 6.25]} size={[0.16, 5.5, 0.16]} mat={MAT.wood} castShadow />
-      <Box pos={[2.45, 2.85, 6.25]} size={[0.16, 5.5, 0.16]} mat={MAT.wood} castShadow />
+      {/* Portal posts (axes 2 and 3) + low tile roof (20 %) */}
+      <Box pos={[-AX, F1 + 1.09, 5.3]} size={[0.16, 2.18, 0.16]} mat={MAT.wood} castShadow />
+      <Box pos={[AX, F1 + 1.09, 5.3]} size={[0.16, 2.18, 0.16]} mat={MAT.wood} castShadow />
+      <Box pos={[-0.255, 2.44, 5.03]} rot={[0.185, 0, 0]} size={[5.96, 0.08, 1.3]} mat={MAT.tile} castShadow />
 
-      {/* Balcony slab over porch + terracotta tile finish + red tile edge */}
-      <BB min={[-2.6, C1, 3.75]} max={[2.6, 2.95, 6.4]} mat={MAT.concrete} castShadow />
-      <BB min={[-2.6, 2.95, 3.75]} max={[2.6, 2.98, 6.4]} mat={MAT.tile} />
-      <BB min={[-2.7, 2.86, 6.4]} max={[2.7, 3.0, 6.52]} mat={MAT.tile} />
-
-      {/* Balcony guardrail (wood, 3 sides) */}
-      <Rail from={[-2.5, 6.3]} to={[2.5, 6.3]} yBase={2.98} />
-      <Rail from={[-2.5, 3.85]} to={[-2.5, 6.3]} yBase={2.98} />
-      <Rail from={[2.5, 3.85]} to={[2.5, 6.3]} yBase={2.98} />
-
-      {/* Pergola over balcony (wood slats, per renders) */}
-      <Box pos={[-2.45, 5.52, 5.1]} size={[0.14, 0.12, 2.9]} mat={MAT.wood} castShadow />
-      <Box pos={[2.45, 5.52, 5.1]} size={[0.14, 0.12, 2.9]} mat={MAT.wood} castShadow />
-      {Array.from({ length: 7 }, (_, i) => (
-        <Box key={`slat${i}`} pos={[0, 5.62, 3.95 + i * 0.4]} size={[5.4, 0.07, 0.14]} mat={MAT.wood} castShadow />
+      {/* Balcony (0.90 m) over the baño volume and the portal */}
+      <BB min={[-3.135, C1, hd]} max={[a0, F2 - 0.02, 4.41]} mat={MAT.concrete} castShadow />
+      <BB min={[-3.135, F2 - 0.02, hd]} max={[a0, F2, 4.41]} mat={MAT.tile} />
+      <Rail from={[-3.085, 4.36]} to={[a0, 4.36]} yBase={F2} />
+      <Rail from={[-3.085, hd]} to={[-3.085, 4.36]} yBase={F2} />
+      {/* pergola joists over the balcony (per renders) */}
+      {Array.from({ length: 12 }, (_, i) => (
+        <Box key={`pj${i}`} pos={[-3.0 + i * 0.4, 5.0, 4.0]} size={[0.07, 0.14, 1.1]} mat={MAT.wood} castShadow />
       ))}
+      <Box pos={[-0.8, 5.0, 4.52]} size={[4.7, 0.14, 0.08]} mat={MAT.wood} />
 
-      {/* Stone chimney column (right of the entry, rises past the roof) */}
-      <BB min={[1.2, 0, 3.45]} max={[2.3, 7.0, 4.35]} mat={MAT.stone} castShadow />
+      {/* Stone chimney (Ducto Chimenea), rises past the roof */}
+      <BB min={[a0, 0, id]} max={[2.625, 6.6, 4.41]} mat={MAT.stone} castShadow />
 
-      {/* Horizontal wood band between floors (visible in renders) */}
+      {/* Wood band between floors (C1 → F2) */}
       <BB min={[-hw - 0.04, C1, -hd - 0.04]} max={[hw + 0.04, F2, -hd]} mat={MAT.wood} />
       <BB min={[-hw - 0.04, C1, hd]} max={[hw + 0.04, F2, hd + 0.04]} mat={MAT.wood} />
       <BB min={[-hw - 0.04, C1, -hd]} max={[-hw, F2, hd]} mat={MAT.wood} />
       <BB min={[hw, C1, -hd]} max={[hw + 0.04, F2, hd]} mat={MAT.wood} />
 
-      {/* Stone base trim (ground floor bottom, per renders) — gap at the entry door */}
-      <BB min={[-hw - 0.03, 0, hd]} max={[-0.9, 0.6, hd + 0.03]} mat={MAT.stone} />
-      <BB min={[0.9, 0, hd]} max={[hw + 0.03, 0.6, hd + 0.03]} mat={MAT.stone} />
+      {/* Stone base trim — skips the glass entry */}
+      <BB min={[-hw - 0.03, 0, hd]} max={[-3.135, 0.6, hd + 0.03]} mat={MAT.stone} />
+      <BB min={[2.625, 0, hd]} max={[hw + 0.03, 0.6, hd + 0.03]} mat={MAT.stone} />
       <BB min={[-hw - 0.03, 0, -hd - 0.03]} max={[hw + 0.03, 0.6, -hd]} mat={MAT.stone} />
       <BB min={[-hw - 0.03, 0, -hd]} max={[-hw, 0.6, hd]} mat={MAT.stone} />
       <BB min={[hw, 0, -hd]} max={[hw + 0.03, 0.6, hd]} mat={MAT.stone} />
 
-      {/* ── Dual offset shed roofs with clerestory gap (per renders) ── */}
-      {/* left shed: low at -X, high toward center */}
-      <Box pos={[-2.45, 6.0, 0]} rot={[0, 0, 0.13]} size={[7.0, 0.14, D + 1.8]} mat={MAT.tile} castShadow receiveShadow />
-      {/* right shed: higher, low at +X */}
-      <Box pos={[3.05, 6.45, 0]} rot={[0, 0, -0.13]} size={[5.9, 0.14, D + 1.8]} mat={MAT.tile} castShadow receiveShadow />
-      {/* clerestory glass band between the two roofs */}
-      <BB min={[0.3, C2, -hd]} max={[0.9, 6.35, hd]} mat={MAT.glass} receiveShadow={false} />
-      {/* wood fascia under each roof edge */}
-      <Box pos={[-2.45, 5.88, 0]} rot={[0, 0, 0.13]} size={[7.0, 0.1, D + 1.6]} mat={MAT.wood} />
-      <Box pos={[3.05, 6.33, 0]} rot={[0, 0, -0.13]} size={[5.9, 0.1, D + 1.6]} mat={MAT.wood} />
+      {/* ── Roofs (planta de cubiertas: 4.09 | 3.05 | 4.09 × 8.40) ── */}
+      <Box pos={[-(a0 + 4.09 / 2), (ROOF_HI + ROOF_LO) / 2, 0]} rot={[0, 0, ROOF_SLOPE]}
+           size={[Math.hypot(4.09, ROOF_HI - ROOF_LO), 0.12, 8.4]} mat={MAT.tile} castShadow receiveShadow />
+      <Box pos={[a0 + 4.09 / 2, (ROOF_HI + ROOF_LO) / 2, 0]} rot={[0, 0, -ROOF_SLOPE]}
+           size={[Math.hypot(4.09, ROOF_HI - ROOF_LO), 0.12, 8.4]} mat={MAT.tile} castShadow receiveShadow />
+      {/* raised central lantern, gabled front/back */}
+      {[1, -1].map((s) => (
+        <Box key={`lan${s}`} pos={[0, (LANTERN_RIDGE + LANTERN_EAVE) / 2, s * 2.1]}
+             rot={[s * Math.atan2(LANTERN_RIDGE - LANTERN_EAVE, 4.2), 0, 0]}
+             size={[3.35, 0.12, 4.22]} mat={MAT.tile} castShadow receiveShadow />
+      ))}
+      {/* clerestory glass on both sides of the lantern + end infill */}
+      <BB min={[-a0 - 0.04, WT, -hd]} max={[-a0 + 0.04, ROOF_HI, hd]} mat={MAT.glass} receiveShadow={false} />
+      <BB min={[a0 - 0.04, WT, -hd]} max={[a0 + 0.04, ROOF_HI, hd]} mat={MAT.glass} receiveShadow={false} />
+      <BB min={[-a0, WT, id]} max={[a0, LANTERN_EAVE, hd]} mat={MAT.adobe} />
+      <BB min={[-a0, WT, -hd]} max={[a0, LANTERN_EAVE, -id]} mat={MAT.adobe} />
 
-      {/* Porch furniture: purple bean bags + plant pots (per renders) */}
-      <mesh position={[-1.9, 0.4, 5.4]} scale={[1, 0.7, 1]} castShadow={SHADOWS} material={MAT.purple}>
-        <sphereGeometry args={[0.45, 16, 12]} />
+      {/* Portal furniture: purple bean bags (per renders) */}
+      <mesh position={[-2.4, F1 + 0.3, 4.9]} scale={[1, 0.7, 1]} castShadow={SHADOWS} material={MAT.purple}>
+        <sphereGeometry args={[0.42, 16, 12]} />
       </mesh>
-      <mesh position={[1.7, 0.38, 5.7]} scale={[1, 0.7, 1]} castShadow={SHADOWS} material={MAT.purple}>
-        <sphereGeometry args={[0.4, 16, 12]} />
+      <mesh position={[2.15, F1 + 0.28, 4.85]} scale={[1, 0.7, 1]} castShadow={SHADOWS} material={MAT.purple}>
+        <sphereGeometry args={[0.38, 16, 12]} />
       </mesh>
-      {[[-2.4, 4.1], [2.3, 4.3]].map(([x, z], i) => (
+      {[[-1.5, 6.0], [1.8, 6.0]].map(([x, z], i) => (
         <group key={`pot${i}`}>
-          <mesh position={[x, 0.35, z]} castShadow={SHADOWS} material={MAT.tile}>
+          <mesh position={[x, 0.2, z]} castShadow={SHADOWS} material={MAT.tile}>
             <cylinderGeometry args={[0.22, 0.16, 0.4, 10]} />
           </mesh>
-          <mesh position={[x, 0.85, z]} material={MAT.leaf}>
+          <mesh position={[x, 0.7, z]} material={MAT.leaf}>
             <sphereGeometry args={[0.35, 10, 8]} />
           </mesh>
         </group>
@@ -467,22 +538,22 @@ function ProceduralHouse() {
 }
 
 // ─── Fittings (no collision) ─────────────────────────────────────────────────
-// Rendered OUTSIDE the RigidBody on purpose: an open door leaf or a hanging
-// lamp would otherwise become a cuboid collider and block the doorway.
+// Rendered OUTSIDE the RigidBody on purpose: an open door leaf, a handrail or a
+// gable triangle would otherwise become a bounding-box collider.
 
-// Door leaf hinged at [x, z], swung `angle` radians about the hinge.
-function Door({ hinge, y, width = 0.8, height = 2.1, angle, mat = MAT.woodLight }) {
+// Door leaf hinged at [x, z], swung `angle` radians about Y.
+// angle 0 → leaf along +X, π/2 → along -Z, π → along -X, -π/2 → along +Z.
+function Door({ hinge, y, width = 0.8, height = DOOR, angle, mat = MAT.woodLight }) {
   return (
     <group position={[hinge[0], y, hinge[1]]} rotation={[0, angle, 0]}>
       <Box pos={[width / 2, height / 2, 0]} size={[width, height, 0.045]} mat={mat} castShadow />
-      {/* handle */}
-      <Box pos={[width - 0.08, height / 2, 0.04]} size={[0.05, 0.05, 0.1]} mat={MAT.frame} />
+      <Box pos={[width - 0.08, height / 2 - 0.05, 0.04]} size={[0.05, 0.05, 0.1]} mat={MAT.frame} />
     </group>
   );
 }
 
-// Pendant lamp: emissive shade on a cord, sitting under a fill light
-function Lamp({ pos, drop = 0.55 }) {
+// Pendant lamp hanging `drop` metres below the ceiling
+function Lamp({ pos, drop = 0.35 }) {
   const [x, y, z] = pos;
   return (
     <group>
@@ -497,25 +568,46 @@ function Lamp({ pos, drop = 0.55 }) {
   );
 }
 
+// Triangular infill under a side roof at the front/back facade
+function Gable({ side, z }) {
+  const geo = useMemo(() => {
+    const s = new THREE.Shape();
+    s.moveTo(side * a0, WT);
+    s.lineTo(side * hw, WT);
+    s.lineTo(side * a0, ROOF_HI);
+    s.closePath();
+    return new THREE.ExtrudeGeometry(s, { depth: T, bevelEnabled: false });
+  }, [side]);
+  return <mesh geometry={geo} position={[0, 0, z]} material={MAT.adobe} castShadow={SHADOWS} receiveShadow={SHADOWS} />;
+}
+
 function Fittings() {
   return (
     <>
-      {/* Ground floor — entry door standing open against the jamb */}
-      <Door hinge={[-0.82, hd - T / 2]} y={F1} width={1.6} height={2.1} angle={-1.72} mat={MAT.wood} />
+      {/* Doors, all standing open against a wall */}
+      <Door hinge={[-2.45, 2.85]} y={F1} width={0.7} angle={1.45} />        {/* baño PB */}
+      <Door hinge={[-2.55, 0]} y={F2} width={0.8} angle={1.45} />            {/* dormitorio 2 */}
+      <Door hinge={[-AX, -0.1]} y={F2} width={0.7} angle={0.1} />            {/* dormitorio 1 */}
+      <Door hinge={[-3.03, 0.8]} y={F2} width={0.68} angle={Math.PI - 0.1} />{/* baño 2 */}
+      <Door hinge={[AX, 2.6]} y={F2} width={0.72} angle={0.1} />             {/* master */}
+      <Door hinge={[3.03, -1.25]} y={F2} width={0.7} angle={Math.PI / 2 + 0.1} />{/* baño en-suite */}
 
-      {/* Second floor — bedroom / bathroom doors, all ajar */}
-      <Door hinge={[-2.78, -1.94]} y={F2} angle={-1.5} />
-      <Door hinge={[-0.58, -1.94]} y={F2} width={0.7} angle={-1.2} />
-      <Door hinge={[3.02, -1.94]}  y={F2} angle={-1.5} />
-      <Door hinge={[-2.18, 1.46]}  y={F2} angle={1.5} />
-      <Door hinge={[2.62, 1.46]}   y={F2} angle={1.35} />
+      {/* Stair handrail, wall-mounted on the kitchen side */}
+      <Box pos={[STAIR_X0 + STAIR_RUN - (STAIR_STEPS * STAIR_RUN) / 2, (F1 + F2) / 2 + 0.9, STAIR_Z0 + 0.05]}
+           rot={[0, 0, -STAIR_ANGLE]}
+           size={[Math.hypot(STAIR_STEPS * STAIR_RUN, F2 - F1), 0.05, 0.05]} mat={MAT.wood} />
 
-      {/* Pendant lamps over the living areas */}
-      <Lamp pos={[3.5, 2.30, 0.6]} />
-      <Lamp pos={[2.4, 2.30, -2.1]} />
-      <Lamp pos={[-3.4, 2.30, -1.8]} />
-      <Lamp pos={[3.0, F2 + 2.05, 2.7]} drop={0.45} />
-      <Lamp pos={[-3.5, F2 + 2.05, -2.9]} drop={0.45} />
+      {/* Gable infills under the side roofs (front + back) */}
+      <Gable side={-1} z={id} />
+      <Gable side={1} z={id} />
+      <Gable side={-1} z={-hd} />
+      <Gable side={1} z={-hd} />
+
+      {/* Pendant lamps */}
+      <Lamp pos={[3.25, C1 - 0.35, -1.9]} />          {/* comedor */}
+      <Lamp pos={[-3.0, C1 - 0.35, -1.45]} />         {/* mesa de billar */}
+      <Lamp pos={[0.41, C2 - 0.4, -1.9]} drop={0.4} />{/* dormitorio 1 */}
+      <Lamp pos={[3.37, C2 - 0.4, 2.0]} drop={0.4} /> {/* master */}
     </>
   );
 }
@@ -525,8 +617,6 @@ function Fittings() {
 function Atmosphere() {
   const { scene } = useThree();
   useEffect(() => {
-    // <Sky> paints the dome; the flat colour is the fallback behind it and the
-    // colour the fog converges to at the far plane.
     scene.background = new THREE.Color('#AFD1E8');
     scene.fog = new THREE.Fog('#D8CBB2', QUALITY.fog[0], QUALITY.fog[1]);
     return () => { scene.background = null; scene.fog = null; };
@@ -534,19 +624,17 @@ function Atmosphere() {
   return null;
 }
 
-// Sun direction — shared by the shadow-casting light and the sky shader so the
-// bright patch in the sky sits where the shadows say it should.
 const SUN = [12, 14, 8];
 
 // Interior warm fill, most important first: QUALITY.fillLights trims the tail
 // on weaker devices (each point light is a per-fragment cost on every surface).
 const FILLS = [
-  { pos: [2.5, 2.2, 1.5],        intensity: 1.2, distance: 9 },
-  { pos: [0.5, F2 + 2.0, 0.5],   intensity: 1.0, distance: 9 },
-  { pos: [-3, 2.2, -1.5],        intensity: 1.0, distance: 8 },
-  { pos: [2.5, 2.2, -2.5],       intensity: 0.9, distance: 7 },
-  { pos: [-3, F2 + 2.0, 2.5],    intensity: 0.8, distance: 7 },
-  { pos: [3, F2 + 2.0, -2.5],    intensity: 0.8, distance: 7 },
+  { pos: [2.8, C1 - 0.4, 1.2],   intensity: 1.2, distance: 8 },  // sala + vestíbulo
+  { pos: [-0.3, F2 + 1.9, 2.4],  intensity: 1.0, distance: 8 },  // hall alto
+  { pos: [-3.1, C1 - 0.4, -1.4], intensity: 1.0, distance: 7 },  // extra / estudio
+  { pos: [0.0, C1 - 0.4, -0.6],  intensity: 0.9, distance: 6 },  // cocina
+  { pos: [3.2, F2 + 1.9, 1.6],   intensity: 0.8, distance: 7 },  // master
+  { pos: [-3.2, F2 + 1.9, -1.6], intensity: 0.8, distance: 7 },  // dormitorio 2
 ];
 
 function Lighting() {
@@ -554,7 +642,6 @@ function Lighting() {
     <>
       <hemisphereLight skyColor="#9FC6E8" groundColor="#7E6C52" intensity={0.5} />
 
-      {/* Main sun — afternoon, front-right of house */}
       <directionalLight
         position={SUN}
         intensity={2.6}
@@ -571,7 +658,6 @@ function Lighting() {
         shadow-normalBias={0.04}
       />
 
-      {/* Soft sky bounce */}
       <directionalLight position={[-9, 7, -7]} intensity={0.3} color="#C0D6F4" />
 
       {FILLS.slice(0, QUALITY.fillLights).map((f, i) => (
@@ -579,12 +665,9 @@ function Lighting() {
                     color="#FFE0A8" distance={f.distance} decay={2} />
       ))}
 
-      {/* Physical sky — gives the facade a real gradient to reflect */}
       <Sky distance={250} sunPosition={SUN} turbidity={2} rayleigh={3.2}
            mieCoefficient={0.005} mieDirectionalG={0.8} />
 
-      {/* IBL built from lightformers instead of a downloaded HDRI: no network
-          asset, resolution scales with the device tier. */}
       <Environment resolution={QUALITY.env} frames={1}>
         <Lightformer form="rect" intensity={2.0} color="#FFE9C4"
                      position={[8, 9, 6]} scale={[12, 12, 1]} target={[0, 0, 0]} />
@@ -592,7 +675,6 @@ function Lighting() {
                      position={[-9, 7, -7]} scale={[14, 14, 1]} target={[0, 0, 0]} />
         <Lightformer form="ring" intensity={0.5} color="#DCEBFF"
                      position={[0, 12, 0]} scale={[16, 16, 1]} target={[0, 0, 0]} />
-        {/* ground bounce — warm, so interiors don't read blue */}
         <Lightformer form="rect" intensity={0.45} color="#9C8A63"
                      rotation-x={Math.PI / 2} position={[0, -3, 0]} scale={[30, 30, 1]} />
       </Environment>
